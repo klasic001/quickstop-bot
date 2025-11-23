@@ -15,9 +15,9 @@ const app = express();
 app.use(express.json());
 
 /* ========== CONFIG - EDIT THESE ========== */
-const INSTANCE_ID = process.env.INSTANCE_ID || "YOUR_INSTANCE_ID";
-const TOKEN = process.env.TOKEN || "YOUR_API_TOKEN";
-const ADMIN_KEY = process.env.ADMIN_KEY || "change_this_to_a_secret";
+const INSTANCE_ID = process.env.INSTANCE_ID || "34742";
+const TOKEN = process.env.TOKEN || "1c309d0ee36ceb74c73a60250bdfee602dfea2857de857a6a56d8a29560cdfff";
+const ADMIN_KEY = process.env.ADMIN_KEY || "01081711";
 const PORT = process.env.PORT || 3000;
 /* ========================================= */
 
@@ -326,3 +326,4 @@ app.get("/", (req, res) => {
 });
 
 app.listen(PORT, () => console.log(`Bot running on port ${PORT}`));
+
