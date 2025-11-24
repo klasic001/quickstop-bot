@@ -150,17 +150,27 @@ function queuePosition(jobId) {
 
 /* ================ WEBHOOK ================= */
 app.post("/webhook", async function(req, res) {
+  console.log("🚀 Incoming payload from WasenderAPI:");
+  console.log(JSON.stringify(req.body, null, 2)); // print full JSON in readable format
+
   const body = req.body || {};
   const rawMsg = body.body || (body.message && body.message.body) || "";
   const fromRaw = body.from || (body.message && body.message.from) || "";
   const from = normalizeNumber(fromRaw);
   const text = ("" + rawMsg).trim();
-  if (!text || !from) return res.sendStatus(200);
-  const lower = text.toLowerCase();
 
+  console.log("📨 Parsed info:", { from, text }); // shows parsed number + message
+
+  if (!text || !from) return res.sendStatus(200);
+
+  const lower = text.toLowerCase();
   const data = readData();
   data.sessions = data.sessions || {};
   if (!data.sessions[from]) data.sessions[from] = { lastMenu: null, collected: {} };
+  
+  // For now, don’t send anything back, just acknowledge
+  res.sendStatus(200);
+});
 
   // Main menu triggers
   if (/^(hi|hello|menu|start)$/i.test(lower)) {
@@ -228,4 +238,5 @@ app.post("/admin/verify_payment",async(req,res)=>{ if(!requireAdmin(req,res)) re
 app.get("/",(req,res)=>{ res.send("QuickStop Cyber WasenderAPI Bot running."); });
 
 app.listen(PORT,()=>console.log(`Bot running on port ${PORT}`));
+
 
