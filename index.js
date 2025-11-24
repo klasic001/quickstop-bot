@@ -292,25 +292,36 @@ app.post("/webhook", async (req, res) => {
     }
   }
 
-  // NEW STUDENT SUBMENU
-  if (session.lastMenu === "new_student") {
-    const newStudentMap = {
-      "1": { name: "UNICAL Checker Pin", msg: SERVICE_MESSAGES.unicalCheckerPin },
-      "2": { name: "Acceptance Fee", msg: SERVICE_MESSAGES.acceptanceFee },
-      "3": { name: "O'level Verification", msg: SERVICE_MESSAGES.olevelVerification },
-      "4": { name: "Online Screening", msg: SERVICE_MESSAGES.onlineScreening },
-      "5": { name: "Other Documents", msg: SERVICE_MESSAGES.otherDocuments }
-    };
-    const selection = newStudentMap[lower];
-    if (selection) {
-      const job = createJob(selection.name);
-      session.lastMenu = null; // exit submenu
-      data.sessions[from] = session;
-      writeData(data);
-      await sendText(from, `${selection.msg}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
-      return res.sendStatus(200);
-    }
+// NEW STUDENT SUBMENU
+if (session.lastMenu === "new_student") {
+  const newStudentMap = {
+    "1": { name: "UNICAL Checker Pin", msg: SERVICE_MESSAGES.unicalCheckerPin },
+    "2": { name: "Acceptance Fee", msg: SERVICE_MESSAGES.acceptanceFee },
+    "3": { name: "O'level Verification", msg: SERVICE_MESSAGES.olevelVerification },
+    "4": { name: "Online Screening", msg: SERVICE_MESSAGES.onlineScreening },
+    "5": { name: "Other Documents", msg: SERVICE_MESSAGES.otherDocuments }
+  };
+
+  const selection = newStudentMap[lower];
+  if (selection) {
+    // CREATE JOB
+    const job = addToQueue(from, selection.name, { messages: [] });
+
+    // LINK JOB TO SESSION
+    session.currentJobId = job.jobId;
+
+    // CLEAR LAST MENU
+    session.lastMenu = null;
+
+    // SAVE SESSION
+    data.sessions[from] = session;
+    writeData(data);
+
+    // SEND SERVICE MESSAGE
+    await sendText(from, `${selection.msg}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
+    return res.sendStatus(200);
   }
+}
 
   // COLLECT DETAILS
   if (session.currentJobId) {
@@ -350,3 +361,4 @@ app.post("/webhook", async (req, res) => {
 /* ================ ROOT ================ */
 app.get("/", (req, res) => res.send("QuickStop Cyber WasenderAPI Bot running."));
 app.listen(PORT, () => console.log(`Bot running on port ${PORT}`));
+
