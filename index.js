@@ -335,39 +335,37 @@ app.post("/webhook", async (req, res) => {
         return res.sendStatus(200);
       }
     }
+   
+// ------------------- DONE -------------------
+if (lower === "done" && session.currentJobId && session.lastMenu === null) {
+  const jobId = session.currentJobId;
+  const job = data.queue.find(j => j.jobId === jobId);
 
-    // ------------------- COLLECT DETAILS -------------------
-    if (session.currentJobId) {
-      const job = data.queue.find(j => j.jobId === session.currentJobId);
-      if (job) {
-        job.details.messages.push({ msg: text, time: Date.now() });
-        data.sessions[from] = session;
-        writeData(data);
-        console.log(`Saved details to job ${job.jobId} (message length ${text.length})`);
-        await sendText(from, `📌 Details received for Ticket ${job.jobId}. Send more or type *done* when finished.`);
-        return res.sendStatus(200);
-      } else {
-        console.warn("session.currentJobId set but job not found:", session.currentJobId);
-      }
-    }
+  session.currentJobId = null;
+  writeData(data);
 
-    // ------------------- DONE -------------------
-    if (lower === "done" && session.currentJobId) {
-      const jobId = session.currentJobId;
-      const job = data.queue.find(j => j.jobId === jobId);
-      session.currentJobId = null;
-      data.sessions[from] = session;
-      writeData(data);
-      if (job) {
-        await sendText(from, `✅ All details saved for Ticket ${jobId}. Admin will provide your fee shortly.`);
-        const collected = (job.details.messages || []).map(m => m.msg).join("\n");
-        await sendText(ADMIN_NUMBER, `📝 User details for Ticket ${jobId} from ${from}\nService: ${job.shortService}\nDetails:\n${collected}\n\nReply with admin:${jobId}:<amount>`);
-        console.log("Done: forwarded details to admin for job", jobId);
-      } else {
-        console.warn("Done typed but job not found:", jobId);
-      }
-      return res.sendStatus(200);
-    }
+  if (job) {
+    await sendText(from, `✅ All details saved for Ticket ${jobId}. Admin will provide your fee shortly.`);
+    const collected = (job.details.messages || []).map(m => m.msg).join("\n");
+    await sendText(ADMIN_NUMBER, `📝 User details for Ticket ${jobId} from ${from}\nService: ${job.shortService}\nDetails:\n${collected}\n\nReply with admin:${jobId}:<amount>`);
+    console.log("Done → sent details to admin");
+  }
+  return res.sendStatus(200);
+}
+
+
+   
+  // ------------------- COLLECT DETAILS -------------------
+if (session.currentJobId && session.lastMenu === null && lower !== "done") {
+  const job = data.queue.find(j => j.jobId === session.currentJobId);
+  if (job) {
+    job.details.messages.push({ msg: text, time: Date.now() });
+    writeData(data);
+    console.log(`Saved details to job ${job.jobId}`);
+    await sendText(from, `📌 Details received for Ticket ${job.jobId}. Send more or type *done* when finished.`);
+    return res.sendStatus(200);
+  }
+}
 
     // ------------------- FALLBACK -------------------
     await sendText(from, `Sorry, I didn't understand. Type *menu* for main menu or *8* to speak to an agent.\n${TESTING_NOTICE}`);
@@ -381,3 +379,4 @@ app.post("/webhook", async (req, res) => {
 /* ================ ROOT ================ */
 app.get("/", (req, res) => res.send("QuickStop Cyber WasenderAPI Bot running."));
 app.listen(PORT, () => console.log(`Bot running on port ${PORT}`));
+
