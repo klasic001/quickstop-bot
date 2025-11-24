@@ -48,10 +48,11 @@ async function sendText(toNumber, text) {
 function normalizeNumber(n) { return (n || "").replace(/\D/g, ""); }
 
 /* ================= BOT CONTENT ================= */
-const TESTING_NOTICE = "⚠️ Note: This bot is currently in testing phase. If something goes wrong, our team will assist you.";
+const TESTING_NOTICE = "⚠️ Note: This is Quickstop bot and it is currently in a testing phase. If something goes wrong, our team will assist you.";
 
-const WELCOME_MENU = `👋 Welcome to QuickStop Cyber!
-This service supports 🎓 UNICAL & 🎓 UICROSS students.
+const WELCOME_MENU = `👋 Welcome to QuickStop Cyber Cafe!
+
+This service supports UNICAL & UICROSS students primarily(for now).
 
 ${TESTING_NOTICE}
 
@@ -87,25 +88,28 @@ Make payment to KUDA 3002896343 QUICKSTOP CYBER CAFE
 ${TESTING_NOTICE}`; }
 
 function msgAcceptanceFee() { return `🟦 ACCEPTANCE FEE
-Price: ₦?? (edit later)
-Send details: Full Name, Reg Number, Department, Email, Phone Number
+Price: ₦42000 
+Send details: Full Name, Reg Number, UNICAL Checker Pin, Email, Phone Number
 Make payment to KUDA 3002896343 QUICKSTOP CYBER CAFE
 ${TESTING_NOTICE}`; }
 
 function msgOlevelVerification() { return `🟦 O'LEVEL VERIFICATION
-Send details: Full Name, Reg Number, O'Level Result (upload), Phone Number
-Payment info to be confirmed
+Price: ₦10500
+Send details: Full Name, Reg Number, Email, Phone Number, O'Level Result (clear photo), Phone Number, Department, Faculty
+Make payment to KUDA 3002896343 QUICKSTOP CYBER CAFE
 ${TESTING_NOTICE}`; }
 
 function msgOnlineScreening() { return `🟦 ONLINE SCREENING
-Send details: Full Name, Reg Number, JAMB Score, O'Level Results, Phone, Email
-Payment info to be confirmed
+Price: C2500
+Send details: Full Name, Reg Number, Address, DOB, Phone, Email, State of origin, Local Government, Home town, Sponsor name, Sponsor Address, Sponsor Phone Number, Emmergency Contact Name, Emergency Contact Address, Relationship with Emergency Contact.
+Send Clear Photos : Passport, Jamb Admission Letter (can get this for you, Check menu for Jamb services), Olevel Result, 2 Attestation Letters, Certificate of Birth, Certificate of Origin.
+Make payment to KUDA 3002896343 QUICKSTOP CYBER CAFE
 ${TESTING_NOTICE}`; }
 
 function msgOtherDocuments() { return `🟦 OTHER DOCUMENTS
-Options: Attestation Letter, Birth Certificate, Certificate of Origin
+Options: Attestation Letter (₦1000 each), Birth Certificate (₦4000), Certificate of Origin(₦5000)
 Send which one you want + details
-Payment info to be confirmed
+Make payment to KUDA 3002896343 QUICKSTOP CYBER CAFE
 ${TESTING_NOTICE}`; }
 
 function msgSchoolFees() { return `🟦 SCHOOL FEES PAYMENT
@@ -312,6 +316,7 @@ app.post("/admin/verify_payment",async(req,res)=>{ if(!requireAdmin(req,res)) re
 app.get("/",(req,res)=>{ res.send("QuickStop Cyber WasenderAPI Bot running."); });
 
 app.listen(PORT,()=>console.log(`Bot running on port ${PORT}`));
+
 
 
 
