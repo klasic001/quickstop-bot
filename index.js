@@ -15,7 +15,7 @@ app.use(express.json());
 const INSTANCE_ID = process.env.INSTANCE_ID || "34742";
 const TOKEN = process.env.TOKEN || "1c309d0ee36ceb74c73a60250bdfee602dfea2857de857a6a56d8a29560cdfff";
 const ADMIN_KEY = process.env.ADMIN_KEY || "01081711";
-const ADMIN_NUMBER = process.env.ADMIN_NUMBER || "2348057703948"; // admin WhatsApp number (digits only)
+const ADMIN_NUMBER = process.env.ADMIN_NUMBER || "2348057703948";
 const PORT = process.env.PORT || 3000;
 /* ========================================= */
 
@@ -77,7 +77,6 @@ Reply with the number.
 
 ${TESTING_NOTICE}`;
 
-// Individual service messages
 const SERVICE_MESSAGES = {
   unicalCheckerPin: `🟦 UNICAL CHECKER PIN
 Price: ₦3500
@@ -231,21 +230,34 @@ app.post("/webhook", async (req, res) => {
 
   /* ------------------- USER BOT LOGIC ------------------- */
   function createJob(serviceName) {
-    const job = addToQueue(from, serviceName, { messages: [] });
-    session.currentJobId = job.jobId;
-    writeData(data);
+    const freshData = readData();
+    const job = {
+      jobId: freshData.nextJobId++,
+      number: from,
+      shortService: serviceName,
+      details: { messages: [] },
+      createdAt: Date.now(),
+      paid: false,
+      status: "waiting",
+      agent: null
+    };
+    freshData.queue.push(job);
+    freshData.sessions[from] = freshData.sessions[from] || {};
+    freshData.sessions[from].currentJobId = job.jobId;
+    writeData(freshData);
     return job;
   }
 
-  // Main menu
+  // MAIN MENU
   if (/^(hi|hello|menu|start)$/i.test(lower)) {
     session.lastMenu = "main";
+    data.sessions[from] = session;
     writeData(data);
     await sendText(from, WELCOME_MENU);
     return res.sendStatus(200);
   }
 
-  // Speak to agent
+  // SPEAK TO AGENT
   if (/^(8|agent|human|help|talk to an agent)$/i.test(lower)) {
     const job = createJob("Speak to Agent");
     await sendText(from, `🙋‍♂️ You are now in the queue. Ticket ID: *${job.jobId}*.\nQueue position: *${queuePosition(job.jobId)}*.\nAn agent will connect soon.\n${TESTING_NOTICE}`);
@@ -253,110 +265,88 @@ app.post("/webhook", async (req, res) => {
     return res.sendStatus(200);
   }
 
-  // Top-level service menu
-  if (/^1$/i.test(lower)) { // New Student submenu
-    session.lastMenu = "new_student";
-    writeData(data);
-    await sendText(from, NEW_STUDENT_MENU);
-    return res.sendStatus(200);
-  }
-  if (/^2$/i.test(lower)) { // School Fees
-    const job = createJob("School Fees Payment");
-    await sendText(from, `${SERVICE_MESSAGES.schoolFees}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
-    return res.sendStatus(200);
-  }
-  if (/^3$/i.test(lower)) { // Online Courses
-    const job = createJob("Online Courses Registration");
-    await sendText(from, `${SERVICE_MESSAGES.onlineCourses}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
-    return res.sendStatus(200);
-  }
-  if (/^4$/i.test(lower)) { // JAMB/Admission
-    const job = createJob("JAMB Result & Admission Letter");
-    await sendText(from, `${SERVICE_MESSAGES.jambAdmission}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
-    return res.sendStatus(200);
-  }
-  if (/^5$/i.test(lower)) { // Typing/Printing
-    const job = createJob("Typing/Printing/Photocopy");
-    await sendText(from, `${SERVICE_MESSAGES.typingPrinting}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
-    return res.sendStatus(200);
-  }
-  if (/^6$/i.test(lower)) { // Graphic Design
-    const job = createJob("Graphic Design");
-    await sendText(from, `${SERVICE_MESSAGES.graphicDesign}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
-    return res.sendStatus(200);
-  }
-  if (/^7$/i.test(lower)) { // Web Design
-    const job = createJob("Web Design");
-    await sendText(from, `${SERVICE_MESSAGES.webDesign}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
-    return res.sendStatus(200);
+  // TOP LEVEL SERVICES
+  const topMenuMap = {
+    "1": "new_student",
+    "2": "School Fees Payment",
+    "3": "Online Courses Registration",
+    "4": "JAMB Result & Admission Letter",
+    "5": "Typing/Printing/Photocopy",
+    "6": "Graphic Design",
+    "7": "Web Design"
+  };
+
+  if (topMenuMap[lower]) {
+    if (lower === "1") {
+      session.lastMenu = "new_student";
+      data.sessions[from] = session;
+      writeData(data);
+      await sendText(from, NEW_STUDENT_MENU);
+      return res.sendStatus(200);
+    } else {
+      const serviceName = topMenuMap[lower];
+      const job = createJob(serviceName);
+      const serviceMsg = SERVICE_MESSAGES[serviceName.replace(/[ /]/g, "").toLowerCase()] || "";
+      await sendText(from, `${serviceMsg}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
+      return res.sendStatus(200);
+    }
   }
 
-  // NEW STUDENT SUBMENU FIXED
+  // NEW STUDENT SUBMENU
   if (session.lastMenu === "new_student") {
     const newStudentMap = {
       "1": { name: "UNICAL Checker Pin", msg: SERVICE_MESSAGES.unicalCheckerPin },
       "2": { name: "Acceptance Fee", msg: SERVICE_MESSAGES.acceptanceFee },
       "3": { name: "O'level Verification", msg: SERVICE_MESSAGES.olevelVerification },
       "4": { name: "Online Screening", msg: SERVICE_MESSAGES.onlineScreening },
-      "5": { name: "Other Documents", msg: SERVICE_MESSAGES.otherDocuments },
+      "5": { name: "Other Documents", msg: SERVICE_MESSAGES.otherDocuments }
     };
-
     const selection = newStudentMap[lower];
-
     if (selection) {
       const job = createJob(selection.name);
-
-      // FIX: exit submenu
-      session.lastMenu = null;
-      const d = readData();
-      d.sessions[from] = session;
-      writeData(d);
-
-      await sendText(
-        from,
-        `${selection.msg}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`
-      );
-
+      session.lastMenu = null; // exit submenu
+      data.sessions[from] = session;
+      writeData(data);
+      await sendText(from, `${selection.msg}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
       return res.sendStatus(200);
     }
   }
 
-  // Collect details
+  // COLLECT DETAILS
   if (session.currentJobId) {
-    const job = data.queue.find(j => j.jobId === session.currentJobId);
-    if (!job.details.messages) job.details.messages = [];
-    job.details.messages.push({ msg: text, time: Date.now() });
-    writeData(data);
-    await sendText(from, `📌 Details received for Ticket ${job.jobId}. Send more or type *done* when finished.`);
-    return res.sendStatus(200);
+    const d = readData();
+    const job = d.queue.find(j => j.jobId === session.currentJobId);
+    if (job) {
+      if (!job.details.messages) job.details.messages = [];
+      job.details.messages.push({ msg: text, time: Date.now() });
+      d.sessions[from] = session;
+      writeData(d);
+      await sendText(from, `📌 Details received for Ticket ${job.jobId}. Send more or type *done* when finished.`);
+      return res.sendStatus(200);
+    }
   }
 
-  // Done collecting details
+  // DONE
   if (lower === "done" && session.currentJobId) {
-    const jobId = session.currentJobId;
-    session.currentJobId = null;
-    writeData(data);
-
-    await sendText(from, `✅ All details saved for Ticket ${jobId}. Admin will provide your fee shortly.`);
-
     const d = readData();
+    const jobId = session.currentJobId;
     const job = d.queue.find(j => j.jobId === jobId);
+    session.currentJobId = null;
+    d.sessions[from] = session;
+    writeData(d);
     if (job) {
+      await sendText(from, `✅ All details saved for Ticket ${jobId}. Admin will provide your fee shortly.`);
       const collectedText = job.details.messages.map(m => m.msg).join("\n");
-      await sendText(
-        ADMIN_NUMBER,
-        `📝 User details for Ticket ${jobId} from ${from}.\nService: ${job.shortService}\nDetails:\n${collectedText}\n\nReply with admin:${jobId}:<amount> to send fee.`
-      );
+      await sendText(ADMIN_NUMBER, `📝 User details for Ticket ${jobId} from ${from}.\nService: ${job.shortService}\nDetails:\n${collectedText}\n\nReply with admin:${jobId}:<amount> to send fee.`);
     }
     return res.sendStatus(200);
   }
 
-  // fallback
+  // FALLBACK
   await sendText(from, `Sorry, I didn't understand. Type *menu* for main menu or *8* to speak to an agent.\n${TESTING_NOTICE}`);
   return res.sendStatus(200);
 });
 
 /* ================ ROOT ================ */
 app.get("/", (req, res) => res.send("QuickStop Cyber WasenderAPI Bot running."));
-
 app.listen(PORT, () => console.log(`Bot running on port ${PORT}`));
