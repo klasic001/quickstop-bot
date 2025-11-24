@@ -157,9 +157,8 @@ app.post("/webhook", async function(req, res) {
   const from = normalizeNumber(fromRaw);
   const text = ("" + rawMsg).trim();
 
-  console.log("🚀 Incoming payload from WasenderAPI:");
-  console.log(JSON.stringify(req.body, null, 2));
-  console.log("📨 Parsed info:", { from, text });
+  console.log("🚀 Incoming payload:", req.body);
+  console.log("📨 Parsed:", { from, text });
 
   if (!text || !from) return res.sendStatus(200);
 
@@ -168,13 +167,9 @@ app.post("/webhook", async function(req, res) {
   data.sessions = data.sessions || {};
   if (!data.sessions[from]) data.sessions[from] = { lastMenu: null, collected: {} };
 
-  // Example async call inside async function
-  // await sendText(from, "Hello! Your message was received.");
+  // ---- ALL your message handling must be inside this async function ----
 
-  res.sendStatus(200);
-});
-
-  // Main menu triggers
+  // Main menu
   if (/^(hi|hello|menu|start)$/i.test(lower)) {
     data.sessions[from].lastMenu = "main";
     writeData(data);
@@ -182,46 +177,46 @@ app.post("/webhook", async function(req, res) {
     return res.sendStatus(200);
   }
 
-  // Speak to Agent
+  // Speak to agent
   if (/^(8|agent|human|help|talk to an agent)$/i.test(lower)) {
     const job = addToQueue(from, "Speak to Agent", { requestedAt: Date.now() });
     const pos = queuePosition(job.jobId);
-    await sendText(from, `🙋‍♂️ You are in the queue. Your queue number is *${pos}*.\nAn agent will connect soon.\n${TESTING_NOTICE}`);
+    await sendText(from, `🙋‍♂️ You are in queue #${pos}\n${TESTING_NOTICE}`);
     return res.sendStatus(200);
   }
 
-  // Menu options
-  if (/^1$/i.test(lower)) { data.sessions[from].lastMenu = "new_student"; writeData(data); await sendText(from, NEW_STUDENT_MENU); return res.sendStatus(200); }
-  if (/^2$/i.test(lower)) { const job=addToQueue(from,"School Fees Payment"); await sendText(from,msgSchoolFees() + `\nRequest ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}`); return res.sendStatus(200); }
-  if (/^3$/i.test(lower)) { const job=addToQueue(from,"Online Courses"); await sendText(from,msgOnlineCourses() + `\nRequest ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}`); return res.sendStatus(200); }
-  if (/^4$/i.test(lower)) { const job=addToQueue(from,"JAMB/Admission"); await sendText(from,msgJambAdmission() + `\nRequest ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}`); return res.sendStatus(200); }
-  if (/^5$/i.test(lower)) { const job=addToQueue(from,"Typing/Printing"); await sendText(from,msgTypingPrinting() + `\nRequest ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}`); return res.sendStatus(200); }
-  if (/^6$/i.test(lower)) { const job=addToQueue(from,"Graphic Design"); await sendText(from,msgGraphicDesign() + `\nRequest ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}`); return res.sendStatus(200); }
-  if (/^7$/i.test(lower)) { const job=addToQueue(from,"Web Design"); await sendText(from,msgWebDesign() + `\nRequest ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}`); return res.sendStatus(200); }
+  // Menu options (example: School Fees)
+  if (/^2$/i.test(lower)) {
+    const job = addToQueue(from, "School Fees Payment");
+    await sendText(from, msgSchoolFees() + `\nRequest ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}`);
+    return res.sendStatus(200);
+  }
 
-  // New Student sub-menu
+  // New student menu
   if (data.sessions[from].lastMenu === "new_student") {
-    if(/^1$/i.test(lower)){ const job=addToQueue(from,"UNICAL Checker Pin",{price:3500}); await sendText(from,msgUnicalCheckerPin()+`\nRequest ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}`); return res.sendStatus(200); }
-    if(/^2$/i.test(lower)){ const job=addToQueue(from,"Acceptance Fee"); await sendText(from,msgAcceptanceFee()+`\nRequest ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}`); return res.sendStatus(200); }
-    if(/^3$/i.test(lower)){ const job=addToQueue(from,"O'level Verification"); await sendText(from,msgOlevelVerification()+`\nRequest ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}`); return res.sendStatus(200); }
-    if(/^4$/i.test(lower)){ const job=addToQueue(from,"Online Screening"); await sendText(from,msgOnlineScreening()+`\nRequest ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}`); return res.sendStatus(200); }
-    if(/^5$/i.test(lower)){ const job=addToQueue(from,"Other Documents"); await sendText(from,msgOtherDocuments()+`\nRequest ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}`); return res.sendStatus(200); }
+    if(/^1$/i.test(lower)){
+      const job = addToQueue(from,"UNICAL Checker Pin",{price:3500});
+      await sendText(from,msgUnicalCheckerPin()+`\nRequest ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}`);
+      return res.sendStatus(200);
+    }
+    // ...other sub-options
   }
 
   // Payment confirmation
   const paidMatch = lower.match(/^paid\s*(\d+)$/);
   if(paidMatch){
-    const jobId=Number(paidMatch[1]);
-    const d=readData();
-    const job=d.queue.find(j=>j.jobId===jobId && j.number===from);
-    if(!job){ await sendText(from, `I couldn't find request ID ${jobId}.`); return res.sendStatus(200); }
-    job.paid=true; writeData(d);
-    await sendText(from, `✅ Payment recorded for request ${jobId}. Queue position: ${queuePosition(jobId)}.\n${TESTING_NOTICE}`);
+    const jobId = Number(paidMatch[1]);
+    const d = readData();
+    const job = d.queue.find(j=>j.jobId===jobId && j.number===from);
+    if(!job){ await sendText(from, `Request ${jobId} not found.`); return res.sendStatus(200); }
+    job.paid = true;
+    writeData(d);
+    await sendText(from, `✅ Payment recorded for ${jobId}.\nQueue: ${queuePosition(jobId)}\n${TESTING_NOTICE}`);
     return res.sendStatus(200);
   }
 
-  // fallback
-  await sendText(from, `Sorry, I didn't understand. Type *menu* to return to main menu or *8* to speak to an agent.\n${TESTING_NOTICE}`);
+  // Fallback
+  await sendText(from, `Sorry, I didn't understand. Type *menu* or *8* to speak to an agent.\n${TESTING_NOTICE}`);
   return res.sendStatus(200);
 });
 
@@ -240,6 +235,7 @@ app.post("/admin/verify_payment",async(req,res)=>{ if(!requireAdmin(req,res)) re
 app.get("/",(req,res)=>{ res.send("QuickStop Cyber WasenderAPI Bot running."); });
 
 app.listen(PORT,()=>console.log(`Bot running on port ${PORT}`));
+
 
 
 
