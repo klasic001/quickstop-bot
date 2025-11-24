@@ -173,59 +173,55 @@ function queuePosition(jobId) {
 /* ================ WEBHOOK ================= */
 app.post("/webhook", async (req, res) => {
   const body = req.body || {};
-  const messagesData = body.data?.messages || null;
-  let text = "";
-  let fromRaw = "";
-  if (messagesData) {
-    text = messagesData.messageBody || "";
-    fromRaw = messagesData.remoteJid?.replace(/@s\.whatsapp\.net$/, "") || "";
-  }
+  const msgData = body.data?.messages || null;
+  if (!msgData) return res.sendStatus(200);
+
+  const text = msgData.messageBody || "";
+  const fromRaw = msgData.remoteJid?.replace(/@s\.whatsapp\.net$/, "") || "";
   const from = normalizeNumber(fromRaw);
   if (!text || !from) return res.sendStatus(200);
 
   const lower = text.trim().toLowerCase();
 
-  // Read fresh data once at start
+  // SINGLE read
   const data = readData();
   data.sessions = data.sessions || {};
-  if (!data.sessions[from])
-    data.sessions[from] = { lastMenu: null, collected: {}, currentJobId: null };
+  if (!data.sessions[from]) {
+    data.sessions[from] = { lastMenu: null, currentJobId: null };
+  }
   const session = data.sessions[from];
 
-  const isFromAdmin = from === normalizeNumber(ADMIN_NUMBER);
+  const isAdmin = from === normalizeNumber(ADMIN_NUMBER);
 
-  /* ------------------- ADMIN COMMANDS ------------------- */
-  if (isFromAdmin) {
-    if (/^(admin|agent):/i.test(text)) {
-      const parts = text.split(":");
-      const cmd = parts[0].toLowerCase();
-      const jobId = Number(parts[1]);
-      const payload = parts.slice(2).join(":").trim();
-      const job = data.queue.find(j => j.jobId === jobId);
-      if (!job) { await sendText(from, `Ticket ${jobId} not found.`); return res.sendStatus(200); }
+  // ------------------- ADMIN -------------------
+  if (isAdmin && /^(admin|agent):/i.test(lower)) {
+    const [cmdRaw, idRaw, ...rest] = text.split(":");
+    const cmd = cmdRaw.toLowerCase();
+    const jobId = Number(idRaw);
+    const payload = rest.join(":").trim();
+    const job = data.queue.find(j => j.jobId === jobId);
+    if (!job) { await sendText(from, `Ticket ${jobId} not found.`); return res.sendStatus(200); }
 
-      if (cmd === "admin") {
-        await sendText(job.number, `🧾 Your fee for Ticket ${jobId} is ₦${payload}.\nPlease pay and send screenshot.`);
-        await sendText(from, `✅ Fee sent to ${job.number} for Ticket ${jobId}`);
-      } else if (cmd === "agent") {
-        if (payload.toLowerCase() === "done") {
-          job.status = "done";
-          await sendText(job.number, `✅ Your request (Ticket ${jobId}) has been completed.`);
-          await sendText(from, `✅ Ticket ${jobId} closed.`);
-        } else {
-          job.details.agentMessages = job.details.agentMessages || [];
-          job.details.agentMessages.push({ msg: payload, time: Date.now() });
-          await sendText(job.number, `💬 Message from agent:\n${payload}`);
-          await sendText(from, `✅ Message sent to ${job.number} for Ticket ${jobId}.`);
-        }
+    if (cmd === "admin") {
+      await sendText(job.number, `🧾 Your fee for Ticket ${jobId} is ₦${payload}.\nPlease pay and send screenshot.`);
+      await sendText(from, `✅ Fee sent to ${job.number} for Ticket ${jobId}`);
+    } else if (cmd === "agent") {
+      if (payload.toLowerCase() === "done") {
+        job.status = "done";
+        await sendText(job.number, `✅ Your request (Ticket ${jobId}) has been completed.`);
+        await sendText(from, `✅ Ticket ${jobId} closed.`);
+      } else {
+        job.details.agentMessages = job.details.agentMessages || [];
+        job.details.agentMessages.push({ msg: payload, time: Date.now() });
+        await sendText(job.number, `💬 Message from agent:\n${payload}`);
+        await sendText(from, `✅ Message sent to ${job.number} for Ticket ${jobId}.`);
       }
-      writeData(data);
-      return res.sendStatus(200);
     }
+    writeData(data);
     return res.sendStatus(200);
   }
 
-  /* ------------------- USER BOT LOGIC ------------------- */
+  // ------------------- CREATE JOB -------------------
   function createJob(serviceName) {
     const job = {
       jobId: data.nextJobId++,
@@ -243,7 +239,7 @@ app.post("/webhook", async (req, res) => {
     return job;
   }
 
-  // MAIN MENU
+  // ------------------- MAIN MENU -------------------
   if (/^(hi|hello|menu|start)$/i.test(lower)) {
     session.lastMenu = "main";
     data.sessions[from] = session;
@@ -252,7 +248,7 @@ app.post("/webhook", async (req, res) => {
     return res.sendStatus(200);
   }
 
-  // SPEAK TO AGENT
+  // ------------------- AGENT REQUEST -------------------
   if (/^(8|agent|human|help|talk to an agent)$/i.test(lower)) {
     const job = createJob("Speak to Agent");
     await sendText(from, `🙋‍♂️ You are now in the queue. Ticket ID: *${job.jobId}*.\nQueue position: *${queuePosition(job.jobId)}*.\nAn agent will connect soon.\n${TESTING_NOTICE}`);
@@ -260,8 +256,8 @@ app.post("/webhook", async (req, res) => {
     return res.sendStatus(200);
   }
 
-  // TOP LEVEL SERVICES
-  const topMenuMap = {
+  // ------------------- TOP MENU -------------------
+  const topMap = {
     "1": "new_student",
     "2": "School Fees Payment",
     "3": "Online Courses Registration",
@@ -270,49 +266,45 @@ app.post("/webhook", async (req, res) => {
     "6": "Graphic Design",
     "7": "Web Design"
   };
-
-  if (topMenuMap[lower]) {
+  if (topMap[lower]) {
     if (lower === "1") {
       session.lastMenu = "new_student";
       data.sessions[from] = session;
       writeData(data);
       await sendText(from, NEW_STUDENT_MENU);
     } else {
-      const serviceName = topMenuMap[lower];
+      const serviceName = topMap[lower];
       const job = createJob(serviceName);
       const key = serviceName.replace(/[ /]/g, "").toLowerCase();
-      const serviceMsg = SERVICE_MESSAGES[key] || "";
-      await sendText(from, `${serviceMsg}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
+      await sendText(from, `${SERVICE_MESSAGES[key]}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
     }
     return res.sendStatus(200);
   }
 
-  // NEW STUDENT SUBMENU
+  // ------------------- NEW STUDENT SUBMENU -------------------
   if (session.lastMenu === "new_student") {
     const newStudentMap = {
-      "1": { name: "UNICAL Checker Pin", msg: SERVICE_MESSAGES.unicalCheckerPin },
-      "2": { name: "Acceptance Fee", msg: SERVICE_MESSAGES.acceptanceFee },
-      "3": { name: "O'level Verification", msg: SERVICE_MESSAGES.olevelVerification },
-      "4": { name: "Online Screening", msg: SERVICE_MESSAGES.onlineScreening },
-      "5": { name: "Other Documents", msg: SERVICE_MESSAGES.otherDocuments }
+      "1": { name: "UNICAL Checker Pin", key: "unicalCheckerPin" },
+      "2": { name: "Acceptance Fee", key: "acceptanceFee" },
+      "3": { name: "O'level Verification", key: "olevelVerification" },
+      "4": { name: "Online Screening", key: "onlineScreening" },
+      "5": { name: "Other Documents", key: "otherDocuments" }
     };
-
-    const selection = newStudentMap[lower];
-    if (selection) {
-      const job = createJob(selection.name);
-      session.lastMenu = null;
+    const sel = newStudentMap[lower];
+    if (sel) {
+      const job = createJob(sel.name);
+      session.lastMenu = null; // clear menu
       data.sessions[from] = session;
       writeData(data);
-      await sendText(from, `${selection.msg}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
+      await sendText(from, `${SERVICE_MESSAGES[sel.key]}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
       return res.sendStatus(200);
     }
   }
 
-  // COLLECT DETAILS
+  // ------------------- COLLECT DETAILS -------------------
   if (session.currentJobId) {
     const job = data.queue.find(j => j.jobId === session.currentJobId);
     if (job) {
-      if (!job.details.messages) job.details.messages = [];
       job.details.messages.push({ msg: text, time: Date.now() });
       data.sessions[from] = session;
       writeData(data);
@@ -321,7 +313,7 @@ app.post("/webhook", async (req, res) => {
     }
   }
 
-  // DONE
+  // ------------------- DONE -------------------
   if (lower === "done" && session.currentJobId) {
     const jobId = session.currentJobId;
     const job = data.queue.find(j => j.jobId === jobId);
@@ -330,20 +322,20 @@ app.post("/webhook", async (req, res) => {
     writeData(data);
     if (job) {
       await sendText(from, `✅ All details saved for Ticket ${jobId}. Admin will provide your fee shortly.`);
-      const collectedText = job.details.messages.map(m => m.msg).join("\n");
-      await sendText(ADMIN_NUMBER, `📝 User details for Ticket ${jobId} from ${from}.\nService: ${job.shortService}\nDetails:\n${collectedText}\n\nReply with admin:${jobId}:<amount> to send fee.`);
+      const collected = job.details.messages.map(m => m.msg).join("\n");
+      await sendText(ADMIN_NUMBER, `📝 User details for Ticket ${jobId} from ${from}\nService: ${job.shortService}\nDetails:\n${collected}\n\nReply with admin:${jobId}:<amount>`);
     }
     return res.sendStatus(200);
   }
 
-  // FALLBACK
+  // ------------------- FALLBACK -------------------
   await sendText(from, `Sorry, I didn't understand. Type *menu* for main menu or *8* to speak to an agent.\n${TESTING_NOTICE}`);
   return res.sendStatus(200);
-});
 
 /* ================ ROOT ================ */
 app.get("/", (req, res) => res.send("QuickStop Cyber WasenderAPI Bot running."));
 app.listen(PORT, () => console.log(`Bot running on port ${PORT}`));
+
 
 
 
