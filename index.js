@@ -29,14 +29,21 @@ function writeData(d) { fs.writeJsonSync(DATA_FILE, d, { spaces: 2 }); }
 async function sendText(toNumber, text) {
   try {
     await axios.post(
-      `${BASE_API}/sendText`,
-      { number: toNumber, message: text },
-      { headers: { Authorization: `Bearer ${TOKEN}` } }
+      "https://wasenderapi.com/api/send-message",
+      {
+        to: toNumber,
+        text: text
+      },
+      {
+        headers: { Authorization: `Bearer ${TOKEN}` }
+      }
     );
+    console.log(`✅ Message sent to ${toNumber}: ${text}`);
   } catch (err) {
     console.error("sendText error:", err?.response?.data || err.message);
   }
 }
+
 
 function normalizeNumber(n) { return (n || "").replace(/\D/g, ""); }
 
@@ -305,6 +312,7 @@ app.post("/admin/verify_payment",async(req,res)=>{ if(!requireAdmin(req,res)) re
 app.get("/",(req,res)=>{ res.send("QuickStop Cyber WasenderAPI Bot running."); });
 
 app.listen(PORT,()=>console.log(`Bot running on port ${PORT}`));
+
 
 
 
