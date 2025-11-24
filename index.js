@@ -1,5 +1,5 @@
 /**
- QuickStop Cyber — Full WasenderAPI Node.js Bot
+ QuickStop Cyber Cafe — Full WasenderAPI Node.js Bot
  Supports all services, detail collection + admin notification + proper ticket IDs
 */
 
@@ -533,3 +533,4 @@ app.post("/webhook", async (req, res) => {
 /* ================ ROOT ================ */
 app.get("/", (req, res) => res.send("QuickStop Cyber WasenderAPI Bot running."));
 app.listen(PORT, () => console.log(`Bot running on port ${PORT}`));
+
