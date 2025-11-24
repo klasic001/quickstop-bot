@@ -13,7 +13,7 @@ app.use(express.json());
 
 /* ========== CONFIG - EDIT THESE ========== */
 const INSTANCE_ID = process.env.INSTANCE_ID || "34742"; // Your WasenderAPI instance
-const TOKEN = process.env.TOKEN || "YOUR_WASENDER_TOKEN";
+const TOKEN = process.env.TOKEN || "1c309d0ee36ceb74c73a60250bdfee602dfea2857de857a6a56d8a29560cdfff";
 const ADMIN_KEY = process.env.ADMIN_KEY || "01081711";
 const PORT = process.env.PORT || 3000;
 /* ========================================= */
@@ -228,3 +228,4 @@ app.post("/admin/verify_payment",async(req,res)=>{ if(!requireAdmin(req,res)) re
 app.get("/",(req,res)=>{ res.send("QuickStop Cyber WasenderAPI Bot running."); });
 
 app.listen(PORT,()=>console.log(`Bot running on port ${PORT}`));
+
