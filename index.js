@@ -1,9 +1,6 @@
 /**
  QuickStop Cyber — WasenderAPI Node.js bot
- - Menu + UNICAL/UICROSS flows
- - Persistent queue & sessions (data.json)
- - Admin endpoints: view queue, take chat, mark done, verify payment
- - Replace INSTANCE_ID and TOKEN before use
+ Fully CommonJS, all services added, testing mode notice
 */
 
 const express = require("express");
@@ -15,27 +12,20 @@ const app = express();
 app.use(express.json());
 
 /* ========== CONFIG - EDIT THESE ========== */
-const INSTANCE_ID = process.env.INSTANCE_ID || "34742";
-const TOKEN = process.env.TOKEN || "1c309d0ee36ceb74c73a60250bdfee602dfea2857de857a6a56d8a29560cdfff";
+const INSTANCE_ID = process.env.INSTANCE_ID || "34742"; // Your WasenderAPI instance
+const TOKEN = process.env.TOKEN || "YOUR_WASENDER_TOKEN";
 const ADMIN_KEY = process.env.ADMIN_KEY || "01081711";
 const PORT = process.env.PORT || 3000;
 /* ========================================= */
 
-// WasenderAPI base URL (adjust if provider's docs differ)
 const BASE_API = `https://api.wasenderapi.com/${INSTANCE_ID}/messages`;
-
-// persistence file
 const DATA_FILE = path.join(__dirname, "data.json");
 
-// ensure data file exists
-const defaultData = { queue: [], sessions: {}, nextJobId: 1 };
-if (!fs.existsSync(DATA_FILE)) fs.writeJsonSync(DATA_FILE, defaultData, { spaces: 2 });
+if (!fs.existsSync(DATA_FILE)) fs.writeJsonSync(DATA_FILE, { queue: [], sessions: {}, nextJobId: 1 }, { spaces: 2 });
 
-// helpers for persistence
 function readData() { return fs.readJsonSync(DATA_FILE); }
 function writeData(d) { fs.writeJsonSync(DATA_FILE, d, { spaces: 2 }); }
 
-// send text via WasenderAPI
 async function sendText(toNumber, text) {
   try {
     await axios.post(
@@ -48,20 +38,17 @@ async function sendText(toNumber, text) {
   }
 }
 
-// convenience: format phone id in the way WasenderAPI expects (no plus, e.g. 2348...)
-// Ensure incoming "from" values are consistent. Adjust if Wasender returns extra suffixes.
-function normalizeNumber(n) {
-  // remove non-digits
-  return (n || "").replace(/\D/g, "");
-}
+function normalizeNumber(n) { return (n || "").replace(/\D/g, ""); }
 
 /* ================= BOT CONTENT ================= */
-// Put your menu and messages here
+const TESTING_NOTICE = "⚠️ Note: This bot is currently in testing phase. If something goes wrong, our team will assist you.";
+
 const WELCOME_MENU = `👋 Welcome to QuickStop Cyber!
 This service supports 🎓 UNICAL & 🎓 UICROSS students.
 
-How can we help you today?
-Reply with a number:
+${TESTING_NOTICE}
+
+How can we help you today? Reply with a number:
 
 1️⃣ New Student Registration
 2️⃣ School Fees Payment
@@ -80,50 +67,75 @@ Choose a service:
 3. O'level Verification
 4. Online Screening
 5. Others (Attestation, Birth Cert, Cert of Origin)
-Reply with the number (e.g. 1).`;
+Reply with the number (e.g. 1).
 
-// example detailed message for UNICAL CHECKER PIN:
-function msgUnicalCheckerPin() {
-  return `🟦 UNICAL CHECKER PIN
+${TESTING_NOTICE}
+`;
+
+// Detailed messages per service
+function msgUnicalCheckerPin() { return `🟦 UNICAL CHECKER PIN
 Price: ₦3500
-This service will be processed by an agent shortly after payment has been confirmed.
+Send details: Full Name, Reg Number, Email, Phone Number
+Make payment to KUDA 3002896343 QUICKSTOP CYBER CAFE
+${TESTING_NOTICE}`; }
 
-Send the following details:
-- Full Name
-- Reg Number
-- Email
-- Phone Number
+function msgAcceptanceFee() { return `🟦 ACCEPTANCE FEE
+Price: ₦?? (edit later)
+Send details: Full Name, Reg Number, Department, Email, Phone Number
+Make payment to KUDA 3002896343 QUICKSTOP CYBER CAFE
+${TESTING_NOTICE}`; }
 
-Make Payment To:
-KUDA
-3002896343
-QUICKSTOP CYBER CAFE
+function msgOlevelVerification() { return `🟦 O'LEVEL VERIFICATION
+Send details: Full Name, Reg Number, O'Level Result (upload), Phone Number
+Payment info to be confirmed
+${TESTING_NOTICE}`; }
 
-⚠️ Ensure all details are correct. QuickStop is not liable for incorrect details.`;
-}
+function msgOnlineScreening() { return `🟦 ONLINE SCREENING
+Send details: Full Name, Reg Number, JAMB Score, O'Level Results, Phone, Email
+Payment info to be confirmed
+${TESTING_NOTICE}`; }
+
+function msgOtherDocuments() { return `🟦 OTHER DOCUMENTS
+Options: Attestation Letter, Birth Certificate, Certificate of Origin
+Send which one you want + details
+Payment info to be confirmed
+${TESTING_NOTICE}`; }
+
+function msgSchoolFees() { return `🟦 SCHOOL FEES PAYMENT
+Price: ₦50,000 (edit later)
+Send: Full Name, Matric Number, Department, Level, Phone Number
+Make payment to KUDA 3002896343 QUICKSTOP CYBER CAFE
+${TESTING_NOTICE}`; }
+
+function msgOnlineCourses() { return `🟦 ONLINE COURSES REGISTRATION
+Send: Full Name, Matric Number, Course(s), Level, Email, Phone Number
+Payment info to be confirmed
+${TESTING_NOTICE}`; }
+
+function msgJambAdmission() { return `🟦 JAMB RESULT & ADMISSION LETTER
+Send: Full Name, JAMB Number, Matric Number, Email, Phone Number
+Payment info to be confirmed
+${TESTING_NOTICE}`; }
+
+function msgTypingPrinting() { return `🟦 TYPING, PRINTING & PHOTOCOPY
+Send: Full Name, Documents Description, Phone Number
+Price varies, pay after quote
+${TESTING_NOTICE}`; }
+
+function msgGraphicDesign() { return `🟦 GRAPHIC DESIGN
+Send: Full Name, Description of work, Phone Number
+Price varies, pay after quote
+${TESTING_NOTICE}`; }
+
+function msgWebDesign() { return `🟦 WEB DESIGN
+Send: Full Name, Description of project, Phone Number
+Price varies, pay after quote
+${TESTING_NOTICE}`; }
 
 /* ================ QUEUE & SESSIONS ================ */
-/*
- Data structure:
- data = {
-   queue: [ { jobId, number, name, service, createdAt, paid:false, status:"waiting" | "assigned" | "done", agent:null } ],
-   sessions: { "<number>": { lastMenu: "...", data: {...} } },
-   nextJobId: int
- }
-*/
-
 function addToQueue(number, shortService, details = {}) {
   const data = readData();
-  const job = {
-    jobId: data.nextJobId++,
-    number,
-    shortService,
-    details,
-    createdAt: Date.now(),
-    paid: false,
-    status: "waiting",
-    agent: null
-  };
+  const job = { jobId: data.nextJobId++, number, shortService, details, createdAt: Date.now(), paid: false, status: "waiting", agent: null };
   data.queue.push(job);
   writeData(data);
   return job;
@@ -131,199 +143,88 @@ function addToQueue(number, shortService, details = {}) {
 
 function queuePosition(jobId) {
   const data = readData();
-  const idx = data.queue.findIndex(j => j.jobId === jobId);
-  if (idx === -1) return -1;
-  // position among waiting jobs ahead of this one (1-based)
   const waiting = data.queue.filter(j => j.status === "waiting");
   const pos = waiting.findIndex(j => j.jobId === jobId);
   return pos >= 0 ? pos + 1 : -1;
 }
 
-function popNextWaiting() {
-  const data = readData();
-  const idx = data.queue.findIndex(j => j.status === "waiting");
-  if (idx === -1) return null;
-  data.queue[idx].status = "assigned";
-  writeData(data);
-  return data.queue[idx];
-}
-
-/* ================ WEBHOOK - Incoming messages from WasenderAPI ================ */
-app.post("/webhook", async (req, res) => {
-  // WasenderAPI JSON structure may vary. Here we attempt to extract from common fields.
+/* ================ WEBHOOK ================= */
+app.post("/webhook", async function(req, res) {
   const body = req.body || {};
-  // Adapt based on the actual payload: message.text or message.body etc.
-  const rawMsg = (body.message && (body.message.text || body.message.body)) || body.body || "";
-  const fromRaw = (body.message && body.message.from) || body.from || body.sender || "";
+  const rawMsg = body.body || (body.message && body.message.body) || "";
+  const fromRaw = body.from || (body.message && body.message.from) || "";
   const from = normalizeNumber(fromRaw);
   const text = ("" + rawMsg).trim();
-
   if (!text || !from) return res.sendStatus(200);
-
   const lower = text.toLowerCase();
 
-  // Sessions: store last menu context for this number
   const data = readData();
   data.sessions = data.sessions || {};
   if (!data.sessions[from]) data.sessions[from] = { lastMenu: null, collected: {} };
 
-  // Simple menu handling:
-  if (/(^hi$|^hello$|^menu$|^start$)/i.test(lower)) {
+  // Main menu triggers
+  if (/^(hi|hello|menu|start)$/i.test(lower)) {
     data.sessions[from].lastMenu = "main";
     writeData(data);
     await sendText(from, WELCOME_MENU);
     return res.sendStatus(200);
   }
 
-  // If user asked to speak to an agent
+  // Speak to Agent
   if (/^(8|agent|human|help|talk to an agent)$/i.test(lower)) {
-    // add to queue
     const job = addToQueue(from, "Speak to Agent", { requestedAt: Date.now() });
     const pos = queuePosition(job.jobId);
-    await sendText(from, `🙋‍♂️ You are now in the queue. Your queue number is *${pos}*. An agent will connect soon.\nIf you paid for a service, send payment details now.`);
-    // notify admin (simple: you can set an admin number or let admin check /admin/queue)
-    // OPTIONAL: send notification to admin number(s) if desired:
-    // await sendText(ADMIN_PHONE, `New queue: job ${job.jobId} from ${from}`);
+    await sendText(from, `🙋‍♂️ You are in the queue. Your queue number is *${pos}*.\nAn agent will connect soon.\n${TESTING_NOTICE}`);
     return res.sendStatus(200);
   }
 
-  // If user chooses 1 - New Student Registration menu
-  if (/^1$/i.test(lower)) {
-    data.sessions[from].lastMenu = "new_student";
-    writeData(data);
-    await sendText(from, NEW_STUDENT_MENU);
-    return res.sendStatus(200);
-  }
+  // Menu options
+  if (/^1$/i.test(lower)) { data.sessions[from].lastMenu = "new_student"; writeData(data); await sendText(from, NEW_STUDENT_MENU); return res.sendStatus(200); }
+  if (/^2$/i.test(lower)) { const job=addToQueue(from,"School Fees Payment"); await sendText(from,msgSchoolFees() + `\nRequest ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}`); return res.sendStatus(200); }
+  if (/^3$/i.test(lower)) { const job=addToQueue(from,"Online Courses"); await sendText(from,msgOnlineCourses() + `\nRequest ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}`); return res.sendStatus(200); }
+  if (/^4$/i.test(lower)) { const job=addToQueue(from,"JAMB/Admission"); await sendText(from,msgJambAdmission() + `\nRequest ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}`); return res.sendStatus(200); }
+  if (/^5$/i.test(lower)) { const job=addToQueue(from,"Typing/Printing"); await sendText(from,msgTypingPrinting() + `\nRequest ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}`); return res.sendStatus(200); }
+  if (/^6$/i.test(lower)) { const job=addToQueue(from,"Graphic Design"); await sendText(from,msgGraphicDesign() + `\nRequest ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}`); return res.sendStatus(200); }
+  if (/^7$/i.test(lower)) { const job=addToQueue(from,"Web Design"); await sendText(from,msgWebDesign() + `\nRequest ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}`); return res.sendStatus(200); }
 
-  // Handle sub-options under New Student Registration
+  // New Student sub-menu
   if (data.sessions[from].lastMenu === "new_student") {
-    if (/^1$/i.test(lower)) {
-      // UNICAL CHECKER PIN selected
-      // we will create a queue job for the service so admin can verify payment later
-      const job = addToQueue(from, "UNICAL Checker Pin", { price: 3500 });
-      const pos = queuePosition(job.jobId);
-      await sendText(from, msgUnicalCheckerPin() + `\n\nYour request ID: ${job.jobId}\nQueue position: ${pos}\n\nAfter making payment, reply with "paid ${job.jobId}" and send your payment screenshot.`);
-      return res.sendStatus(200);
-    }
-    if (/^2$/i.test(lower)) {
-      // Acceptance fee - create job with placeholder price
-      const job = addToQueue(from, "Acceptance Fee", { price: null });
-      const pos = queuePosition(job.jobId);
-      await sendText(from, `🟦 ACCEPTANCE FEE\n(Price will be confirmed)\nSend: Full Name, Reg Number, Department, Email, Phone\nYour request ID: ${job.jobId}\nQueue position: ${pos}`);
-      return res.sendStatus(200);
-    }
-    if (/^3$/i.test(lower)) {
-      const job = addToQueue(from, "O'level Verification", { price: null });
-      const pos = queuePosition(job.jobId);
-      await sendText(from, `🟦 O'LEVEL VERIFICATION\nSend: Full Name, Reg Number, O'level Result (upload), Phone\nYour request ID: ${job.jobId}\nQueue position: ${pos}`);
-      return res.sendStatus(200);
-    }
-    if (/^4$/i.test(lower)) {
-      const job = addToQueue(from, "Online Screening", { price: null });
-      const pos = queuePosition(job.jobId);
-      await sendText(from, `🟦 ONLINE SCREENING\nSend: Full Name, Reg Number, JAMB Score, Olevel Results, Phone, Email\nYour request ID: ${job.jobId}\nQueue position: ${pos}`);
-      return res.sendStatus(200);
-    }
-    if (/^5$/i.test(lower)) {
-      const job = addToQueue(from, "Other Documents", { price: null });
-      const pos = queuePosition(job.jobId);
-      await sendText(from, `🟦 OTHER DOCUMENTS\nA. Attestation Letter\nB. Birth Certificate\nC. Certificate of Origin\nSend which one you want and your details.\nRequest ID: ${job.jobId}\nQueue position: ${pos}`);
-      return res.sendStatus(200);
-    }
+    if(/^1$/i.test(lower)){ const job=addToQueue(from,"UNICAL Checker Pin",{price:3500}); await sendText(from,msgUnicalCheckerPin()+`\nRequest ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}`); return res.sendStatus(200); }
+    if(/^2$/i.test(lower)){ const job=addToQueue(from,"Acceptance Fee"); await sendText(from,msgAcceptanceFee()+`\nRequest ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}`); return res.sendStatus(200); }
+    if(/^3$/i.test(lower)){ const job=addToQueue(from,"O'level Verification"); await sendText(from,msgOlevelVerification()+`\nRequest ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}`); return res.sendStatus(200); }
+    if(/^4$/i.test(lower)){ const job=addToQueue(from,"Online Screening"); await sendText(from,msgOnlineScreening()+`\nRequest ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}`); return res.sendStatus(200); }
+    if(/^5$/i.test(lower)){ const job=addToQueue(from,"Other Documents"); await sendText(from,msgOtherDocuments()+`\nRequest ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}`); return res.sendStatus(200); }
   }
 
-  // Payment notice: user may reply "paid <jobId>" to indicate they paid
+  // Payment confirmation
   const paidMatch = lower.match(/^paid\s*(\d+)$/);
-  if (paidMatch) {
-    const jobId = Number(paidMatch[1]);
-    const d = readData();
-    const job = d.queue.find(j => j.jobId === jobId && j.number === from);
-    if (!job) {
-      await sendText(from, `I couldn't find a request with ID ${jobId} for your number. Please check and try again.`);
-      return res.sendStatus(200);
-    }
-    job.paid = true;
-    writeData(d);
-    await sendText(from, `Thanks — we recorded your payment for request ${jobId}. An agent will verify and process it. You are still number ${queuePosition(jobId)} in the queue.`);
-    // notify admin? (optional)
+  if(paidMatch){
+    const jobId=Number(paidMatch[1]);
+    const d=readData();
+    const job=d.queue.find(j=>j.jobId===jobId && j.number===from);
+    if(!job){ await sendText(from, `I couldn't find request ID ${jobId}.`); return res.sendStatus(200); }
+    job.paid=true; writeData(d);
+    await sendText(from, `✅ Payment recorded for request ${jobId}. Queue position: ${queuePosition(jobId)}.\n${TESTING_NOTICE}`);
     return res.sendStatus(200);
   }
 
-  // Default fallback
-  await sendText(from, `Sorry, I didn't understand that. Type *menu* to return to the main menu or *8* to speak to an agent.`);
+  // fallback
+  await sendText(from, `Sorry, I didn't understand. Type *menu* to return to main menu or *8* to speak to an agent.\n${TESTING_NOTICE}`);
   return res.sendStatus(200);
 });
 
-/* ================ ADMIN / AGENT ENDPOINTS ================ */
-/*
- - /admin/queue?key=ADMIN_KEY            -> view queue
- - /admin/take?key=ADMIN_KEY&job=ID&agent=Name -> assign job to agent (sends notification to customer)
- - /admin/done?key=ADMIN_KEY&job=ID      -> mark as done (notifies customer)
- - /admin/verify_payment?key=ADMIN_KEY&job=ID -> set paid=true and notify customer
-*/
+/* ================ ADMIN ENDPOINTS ================ */
+function requireAdmin(req,res){ const k=(req.query.key||req.headers['x-admin-key']||"").trim(); if(!k||k!==ADMIN_KEY){res.status(401).json({error:"unauthorized"}); return false;} return true; }
 
-function requireAdmin(req, res) {
-  const k = (req.query.key || req.headers['x-admin-key'] || "").trim();
-  if (!k || k !== ADMIN_KEY) {
-    res.status(401).json({ error: "unauthorized" });
-    return false;
-  }
-  return true;
-}
+app.get("/admin/queue",(req,res)=>{ if(!requireAdmin(req,res)) return; const d=readData(); const visible=d.queue.filter(j=>["waiting","assigned"].includes(j.status)); res.json({queue:visible,nextJobId:d.nextJobId}); });
 
-app.get("/admin/queue", (req, res) => {
-  if (!requireAdmin(req, res)) return;
-  const d = readData();
-  // only return waiting and assigned
-  const visible = d.queue.filter(j => j.status === "waiting" || j.status === "assigned");
-  res.json({ queue: visible, nextJobId: d.nextJobId });
-});
+app.post("/admin/take",async(req,res)=>{ if(!requireAdmin(req,res)) return; const jobId=Number(req.body.job); const agent=req.body.agent||"Agent"; const d=readData(); const job=d.queue.find(j=>j.jobId===jobId); if(!job) return res.status(404).json({error:"job not found"}); job.status="assigned"; job.agent=agent; writeData(d); await sendText(job.number,`✅ Hi — ${agent} has taken your request (ID ${job.jobId}). You are now connected.`); return res.json({ok:true,job}); });
 
-app.post("/admin/take", async (req, res) => {
-  if (!requireAdmin(req, res)) return;
-  const jobId = Number(req.body.job);
-  const agent = req.body.agent || "Agent";
-  const d = readData();
-  const job = d.queue.find(j => j.jobId === jobId);
-  if (!job) return res.status(404).json({ error: "job not found" });
-  job.status = "assigned";
-  job.agent = agent;
-  writeData(d);
-  // notify customer
-  await sendText(job.number, `✅ Hi — ${agent} has taken your request (ID ${job.jobId}).\nYou are now connected. How can we help further?`);
-  return res.json({ ok: true, job });
-});
+app.post("/admin/done",async(req,res)=>{ if(!requireAdmin(req,res)) return; const jobId=Number(req.body.job); const d=readData(); const job=d.queue.find(j=>j.jobId===jobId); if(!job) return res.status(404).json({error:"job not found"}); job.status="done"; writeData(d); await sendText(job.number,`✅ Your request (ID ${job.jobId}) has been completed. Thank you for using QuickStop Cyber.`); return res.json({ok:true,job}); });
 
-app.post("/admin/done", async (req, res) => {
-  if (!requireAdmin(req, res)) return;
-  const jobId = Number(req.body.job);
-  const d = readData();
-  const job = d.queue.find(j => j.jobId === jobId);
-  if (!job) return res.status(404).json({ error: "job not found" });
-  job.status = "done";
-  writeData(d);
-  await sendText(job.number, `✅ Your request (ID ${job.jobId}) has been completed. Thank you for using QuickStop Cyber.`);
-  return res.json({ ok: true, job });
-});
+app.post("/admin/verify_payment",async(req,res)=>{ if(!requireAdmin(req,res)) return; const jobId=Number(req.body.job); const d=readData(); const job=d.queue.find(j=>j.jobId===jobId); if(!job) return res.status(404).json({error:"job not found"}); job.paid=true; writeData(d); await sendText(job.number,`✅ Payment for request ${job.jobId} has been verified.`); return res.json({ok:true,job}); });
 
-app.post("/admin/verify_payment", async (req, res) => {
-  if (!requireAdmin(req, res)) return;
-  const jobId = Number(req.body.job);
-  const d = readData();
-  const job = d.queue.find(j => j.jobId === jobId);
-  if (!job) return res.status(404).json({ error: "job not found" });
-  job.paid = true;
-  writeData(d);
-  await sendText(job.number, `✅ Payment for request ${job.jobId} has been verified by our team. We will process your request shortly.`);
-  return res.json({ ok: true, job });
-});
+/* ================ ROOT ================ */
+app.get("/",(req,res)=>{ res.send("QuickStop Cyber WasenderAPI Bot running."); });
 
-/* ================ SIMPLE WEB UI FOR AGENTS (OPTIONAL) ================ */
-/* Not needed — admin endpoints are enough. You can create a simple HTML page that calls the endpoints with the key. */
-
-app.get("/", (req, res) => {
-  res.send("QuickStop Cyber WasenderAPI Bot running.");
-});
-
-app.listen(PORT, () => console.log(`Bot running on port ${PORT}`));
-
+app.listen(PORT,()=>console.log(`Bot running on port ${PORT}`));
