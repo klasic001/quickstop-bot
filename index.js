@@ -331,6 +331,7 @@ app.post("/webhook", async (req, res) => {
   // ------------------- FALLBACK -------------------
   await sendText(from, `Sorry, I didn't understand. Type *menu* for main menu or *8* to speak to an agent.\n${TESTING_NOTICE}`);
   return res.sendStatus(200);
+}); // <-- CLOSES app.post("/webhook")
 
 /* ================ ROOT ================ */
 app.get("/", (req, res) => res.send("QuickStop Cyber WasenderAPI Bot running."));
