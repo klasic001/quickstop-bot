@@ -148,7 +148,6 @@ ${TESTING_NOTICE}`,
 
 /* ================ QUEUE & SESSIONS ================ */
 function addToQueue(number, serviceName, details = {}) {
-  // read-write inside this function to keep nextJobId atomic
   const data = readData();
   const job = {
     jobId: data.nextJobId++,
@@ -179,7 +178,6 @@ app.post("/webhook", async (req, res) => {
   let text = "";
   let fromRaw = "";
   if (messagesData) {
-    // keep your original extraction (works with your webhook payload)
     text = messagesData.messageBody || "";
     fromRaw = messagesData.remoteJid?.replace(/@s\.whatsapp\.net$/, "") || "";
   }
@@ -187,8 +185,6 @@ app.post("/webhook", async (req, res) => {
   if (!text || !from) return res.sendStatus(200);
 
   const lower = text.trim().toLowerCase();
-
-  // read data fresh at start of request
   const data = readData();
   data.sessions = data.sessions || {};
   if (!data.sessions[from])
@@ -234,35 +230,17 @@ app.post("/webhook", async (req, res) => {
   }
 
   /* ------------------- USER BOT LOGIC ------------------- */
-
-  // createJob now uses addToQueue (which does atomic read/write),
-  // then we persist the session.currentJobId using a fresh read/write so we don't overwrite nextJobId.
   function createJob(serviceName) {
-    // addToQueue handles nextJobId increment and write
     const job = addToQueue(from, serviceName, { messages: [] });
-
-    // persist session.currentJobId in the shared data store (read fresh then write)
-    const d = readData();
-    d.sessions = d.sessions || {};
-    if (!d.sessions[from]) d.sessions[from] = { lastMenu: null, collected: {}, currentJobId: null };
-    d.sessions[from].currentJobId = job.jobId;
-    writeData(d);
-
-    // also update local session (so rest of this request sees it)
     session.currentJobId = job.jobId;
-
+    writeData(data);
     return job;
   }
 
   // Main menu
   if (/^(hi|hello|menu|start)$/i.test(lower)) {
     session.lastMenu = "main";
-    // persist session change
-    const d = readData();
-    d.sessions = d.sessions || {};
-    d.sessions[from] = session;
-    writeData(d);
-
+    writeData(data);
     await sendText(from, WELCOME_MENU);
     return res.sendStatus(200);
   }
@@ -278,12 +256,7 @@ app.post("/webhook", async (req, res) => {
   // Top-level service menu
   if (/^1$/i.test(lower)) { // New Student submenu
     session.lastMenu = "new_student";
-    // persist session change
-    const d = readData();
-    d.sessions = d.sessions || {};
-    d.sessions[from] = session;
-    writeData(d);
-
+    writeData(data);
     await sendText(from, NEW_STUDENT_MENU);
     return res.sendStatus(200);
   }
@@ -318,68 +291,64 @@ app.post("/webhook", async (req, res) => {
     return res.sendStatus(200);
   }
 
-  // New Student submenu selection
+  // NEW STUDENT SUBMENU FIXED
   if (session.lastMenu === "new_student") {
     const newStudentMap = {
-      "1": { name: "UNICAL Checker Pin", msg: SERVICE_MESSAGES.unicalCheckerPin, price: 3500 },
-      "2": { name: "Acceptance Fee", msg: SERVICE_MESSAGES.acceptanceFee, price: 42000 },
-      "3": { name: "O'level Verification", msg: SERVICE_MESSAGES.olevelVerification, price: 10500 },
-      "4": { name: "Online Screening", msg: SERVICE_MESSAGES.onlineScreening, price: 2500 },
-      "5": { name: "Other Documents", msg: SERVICE_MESSAGES.otherDocuments, price: 0 },
+      "1": { name: "UNICAL Checker Pin", msg: SERVICE_MESSAGES.unicalCheckerPin },
+      "2": { name: "Acceptance Fee", msg: SERVICE_MESSAGES.acceptanceFee },
+      "3": { name: "O'level Verification", msg: SERVICE_MESSAGES.olevelVerification },
+      "4": { name: "Online Screening", msg: SERVICE_MESSAGES.onlineScreening },
+      "5": { name: "Other Documents", msg: SERVICE_MESSAGES.otherDocuments },
     };
+
     const selection = newStudentMap[lower];
+
     if (selection) {
       const job = createJob(selection.name);
-      await sendText(from, `${selection.msg}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
+
+      // FIX: exit submenu
+      session.lastMenu = null;
+      const d = readData();
+      d.sessions[from] = session;
+      writeData(d);
+
+      await sendText(
+        from,
+        `${selection.msg}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`
+      );
+
       return res.sendStatus(200);
     }
   }
 
-  // ----------------- IMPORTANT ORDER FIX -----------------
-  // DONE must be checked BEFORE collecting details so "done" isn't saved as a normal message.
-  if (lower === "done" && session.currentJobId) {
-    const jobId = session.currentJobId;
-
-    // clear session currentJobId and persist
-    session.currentJobId = null;
-    const d = readData();
-    d.sessions = d.sessions || {};
-    if (!d.sessions[from]) d.sessions[from] = { lastMenu: null, collected: {}, currentJobId: null };
-    d.sessions[from].currentJobId = null;
-    writeData(d);
-
-    await sendText(from, `✅ All details saved for Ticket ${jobId}. Admin will provide your fee shortly.`);
-
-    const dd = readData();
-    const job = dd.queue.find(j => j.jobId === jobId);
-    if (job) {
-      const collectedText = (job.details.messages || []).map(m => m.msg).join("\n");
-      await sendText(ADMIN_NUMBER, `📝 User details for Ticket ${jobId} from ${from}.\nService: ${job.shortService}\nDetails:\n${collectedText}\n\nReply with admin:${jobId}:<amount> to send fee.`);
-    }
+  // Collect details
+  if (session.currentJobId) {
+    const job = data.queue.find(j => j.jobId === session.currentJobId);
+    if (!job.details.messages) job.details.messages = [];
+    job.details.messages.push({ msg: text, time: Date.now() });
+    writeData(data);
+    await sendText(from, `📌 Details received for Ticket ${job.jobId}. Send more or type *done* when finished.`);
     return res.sendStatus(200);
   }
 
-  // Collect details (only if there's an active job)
-  if (session.currentJobId) {
-    // Use fresh data object to avoid stale overwrites
+  // Done collecting details
+  if (lower === "done" && session.currentJobId) {
+    const jobId = session.currentJobId;
+    session.currentJobId = null;
+    writeData(data);
+
+    await sendText(from, `✅ All details saved for Ticket ${jobId}. Admin will provide your fee shortly.`);
+
     const d = readData();
-    const job = d.queue.find(j => j.jobId === session.currentJobId);
+    const job = d.queue.find(j => j.jobId === jobId);
     if (job) {
-      if (!job.details.messages) job.details.messages = [];
-      job.details.messages.push({ msg: text, time: Date.now() });
-      writeData(d);
-      await sendText(from, `📌 Details received for Ticket ${job.jobId}. Send more or type *done* when finished.`);
-      return res.sendStatus(200);
-    } else {
-      // fallback: session references a job that doesn't exist; clear it
-      session.currentJobId = null;
-      const d2 = readData();
-      d2.sessions = d2.sessions || {};
-      d2.sessions[from] = session;
-      writeData(d2);
-      await sendText(from, `⚠️ Sorry, I couldn't find your ticket. Type *menu* to start again.`);
-      return res.sendStatus(200);
+      const collectedText = job.details.messages.map(m => m.msg).join("\n");
+      await sendText(
+        ADMIN_NUMBER,
+        `📝 User details for Ticket ${jobId} from ${from}.\nService: ${job.shortService}\nDetails:\n${collectedText}\n\nReply with admin:${jobId}:<amount> to send fee.`
+      );
     }
+    return res.sendStatus(200);
   }
 
   // fallback
