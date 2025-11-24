@@ -304,24 +304,29 @@ if (session.lastMenu === "new_student") {
 
   const selection = newStudentMap[lower];
   if (selection) {
-    // CREATE JOB
+    // 1️⃣ Create job first
     const job = addToQueue(from, selection.name, { messages: [] });
 
-    // LINK JOB TO SESSION
+    // 2️⃣ Link job to session
     session.currentJobId = job.jobId;
 
-    // CLEAR LAST MENU
+    // 3️⃣ Clear submenu
     session.lastMenu = null;
 
-    // SAVE SESSION
+    // 4️⃣ Save session
     data.sessions[from] = session;
     writeData(data);
 
-    // SEND SERVICE MESSAGE
-    await sendText(from, `${selection.msg}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
+    // 5️⃣ Send service message
+    await sendText(
+      from,
+      `${selection.msg}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`
+    );
+
     return res.sendStatus(200);
   }
 }
+
 
   // COLLECT DETAILS
   if (session.currentJobId) {
@@ -361,4 +366,5 @@ if (session.lastMenu === "new_student") {
 /* ================ ROOT ================ */
 app.get("/", (req, res) => res.send("QuickStop Cyber WasenderAPI Bot running."));
 app.listen(PORT, () => console.log(`Bot running on port ${PORT}`));
+
 
