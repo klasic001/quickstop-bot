@@ -239,11 +239,12 @@ app.post("/webhook", async (req, res) => {
     // load data and ensure session exists
     const data = readData();
     data.sessions = data.sessions || {};
-    if (!data.sessions[from]) data.sessions[from] = { lastMenu: "main", currentJobId: null };
+    if (!data.sessions[from]) data.sessions[from] = { lastMenu: "main", currentJobId: null, mode: "bot" };
     const session = data.sessions[from];
 
     // ensure lastMenu is explicitly one of: "main", "new_student", null
     if (typeof session.lastMenu === "undefined") session.lastMenu = "main";
+    if (typeof session.mode === "undefined") session.mode = "bot";
 
     console.log("=== INCOMING ===");
     console.log("from:", from);
@@ -265,23 +266,72 @@ app.post("/webhook", async (req, res) => {
       if (!job) { await sendText(from, `Ticket ${jobId} not found.`); writeData(data); return res.sendStatus(200); }
 
       if (cmd === "admin") {
+        // admin sets fee — unaffected
         await sendText(job.number, `🧾 Your fee for Ticket ${jobId} is ₦${payload}.\nPlease pay and send screenshot.`);
         await sendText(from, `✅ Fee sent to ${job.number} for Ticket ${jobId}`);
       } else if (cmd === "agent") {
+        // agent messages (forward to user). Special payload "done" closes job.
         if (payload.toLowerCase() === "done") {
+          // close job
           job.status = "done";
           writeData(data);
           await sendText(job.number, `✅ Your request (Ticket ${jobId}) has been completed.`);
           await sendText(from, `✅ Ticket ${jobId} closed.`);
-        } else {
-          job.details.agentMessages = job.details.agentMessages || [];
-          job.details.agentMessages.push({ msg: payload, time: Date.now() });
-          writeData(data);
-          await sendText(job.number, `💬 Message from agent:\n${payload}`);
-          await sendText(from, `✅ Message sent to ${job.number} for Ticket ${jobId}.`);
+
+          // clear session mode for that user (handover end)
+          const userSession = data.sessions[job.number];
+          if (userSession) {
+            userSession.mode = "bot";
+            userSession.currentJobId = null;
+            data.sessions[job.number] = userSession;
+            writeData(data);
+          }
+          return res.sendStatus(200);
         }
+
+        // normal agent message (forward to user)
+        job.details.agentMessages = job.details.agentMessages || [];
+        job.details.agentMessages.push({ msg: payload, time: Date.now() });
+        writeData(data);
+
+        // mark job as assigned if not already
+        if (!job.agent) job.agent = from;
+
+        // set user's session into active agent chat
+        data.sessions[job.number] = data.sessions[job.number] || { lastMenu: null, currentJobId: job.jobId, mode: "agent_chat" };
+        data.sessions[job.number].mode = "agent_chat";
+        data.sessions[job.number].currentJobId = job.jobId;
+        writeData(data);
+
+        // forward message to user
+        await sendText(job.number, `💬 Message from agent:\n${payload}`);
+        await sendText(from, `✅ Message sent to ${job.number} for Ticket ${jobId}.`);
       }
       writeData(data);
+      return res.sendStatus(200);
+    }
+
+    /* ------------------- If user is currently in an agent chat, forward messages to admin and don't reply with menus ------------------- */
+    if (session.mode === "agent_chat") {
+      // ensure we have a current job id
+      let jobId = session.currentJobId;
+      if (!jobId) {
+        // attempt to find an assigned job for this user
+        const maybe = data.queue.find(j => j.number === from && j.agent);
+        if (maybe) jobId = maybe.jobId;
+        // link job to session if found
+        if (jobId) {
+          session.currentJobId = jobId;
+          data.sessions[from] = session;
+          writeData(data);
+        }
+      }
+
+      // forward user's message to admin with job context
+      const forwardMsg = `📨 Message from user (Ticket ${jobId || "unknown"}) [${from}]:\n${text}`;
+      await sendText(ADMIN_NUMBER, forwardMsg);
+      // optionally acknowledge to user lightly (or be silent). We'll acknowledge.
+      await sendText(from, `📤 Your message has been forwarded to our agent. They will reply shortly. (Ticket ${jobId || "N/A"})`);
       return res.sendStatus(200);
     }
 
@@ -289,6 +339,7 @@ app.post("/webhook", async (req, res) => {
     if (lower === "0" || /^menu$/i.test(lower) || /^main$/i.test(lower)) {
       session.lastMenu = "main";
       // do NOT clear currentJobId here because user may be mid-job; they can still send details
+      session.mode = "bot";
       data.sessions[from] = session;
       writeData(data);
       await sendText(from, WELCOME_MENU);
@@ -310,6 +361,7 @@ app.post("/webhook", async (req, res) => {
       data.queue.push(job);
       // link session to job and persist
       session.currentJobId = job.jobId;
+      session.mode = "bot"; // by default bot mode (until explicit handover)
       data.sessions[from] = session;
       writeData(data);
       console.log(`createJob -> job ${job.jobId} created and session saved`);
@@ -331,9 +383,12 @@ app.post("/webhook", async (req, res) => {
       if (/^(8|agent|human|help|talk to an agent)$/i.test(lower)) {
         const job = createJob("Speak to Agent");
         await sendText(from, `🙋‍♂️ You are now in the queue. Ticket ID: *${job.jobId}*.\nQueue position: *${queuePosition(job.jobId)}*.\nAn agent will connect soon.\n${TESTING_NOTICE}`);
-        await sendText(ADMIN_NUMBER, `📥 New agent request\nTicket ${job.jobId} from ${from}`);
-        // After creating a job, keep session.lastMenu as null to allow details if user sends them
+        // notify admin
+        await sendText(ADMIN_NUMBER, `📥 New agent request\nTicket ${job.jobId} from ${from}\nService: Speak to Agent`);
+        // After creating a job, set session to awaiting_agent so the bot won't auto-reply with menus
         session.lastMenu = null;
+        session.mode = "awaiting_agent";
+        session.currentJobId = job.jobId;
         data.sessions[from] = session;
         writeData(data);
         return res.sendStatus(200);
@@ -355,6 +410,7 @@ app.post("/webhook", async (req, res) => {
         await sendText(from, `${svcMsg}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
         // clear menu (we're now collecting details)
         session.lastMenu = null;
+        session.mode = "bot";
         data.sessions[from] = session;
         writeData(data);
         return res.sendStatus(200);
@@ -365,6 +421,7 @@ app.post("/webhook", async (req, res) => {
         const svcMsg = SERVICE_MESSAGES.onlineCourses || "";
         await sendText(from, `${svcMsg}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
         session.lastMenu = null;
+        session.mode = "bot";
         data.sessions[from] = session;
         writeData(data);
         return res.sendStatus(200);
@@ -375,6 +432,7 @@ app.post("/webhook", async (req, res) => {
         const svcMsg = SERVICE_MESSAGES.jambAdmission || "";
         await sendText(from, `${svcMsg}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
         session.lastMenu = null;
+        session.mode = "bot";
         data.sessions[from] = session;
         writeData(data);
         return res.sendStatus(200);
@@ -385,6 +443,7 @@ app.post("/webhook", async (req, res) => {
         const svcMsg = SERVICE_MESSAGES.typingPrinting || "";
         await sendText(from, `${svcMsg}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
         session.lastMenu = null;
+        session.mode = "bot";
         data.sessions[from] = session;
         writeData(data);
         return res.sendStatus(200);
@@ -395,6 +454,7 @@ app.post("/webhook", async (req, res) => {
         const svcMsg = SERVICE_MESSAGES.graphicDesign || "";
         await sendText(from, `${svcMsg}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
         session.lastMenu = null;
+        session.mode = "bot";
         data.sessions[from] = session;
         writeData(data);
         return res.sendStatus(200);
@@ -405,6 +465,7 @@ app.post("/webhook", async (req, res) => {
         const svcMsg = SERVICE_MESSAGES.webDesign || "";
         await sendText(from, `${svcMsg}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
         session.lastMenu = null;
+        session.mode = "bot";
         data.sessions[from] = session;
         writeData(data);
         return res.sendStatus(200);
@@ -430,6 +491,7 @@ app.post("/webhook", async (req, res) => {
       if (/^1$/i.test(lower)) {
         const job = createJob("UNICAL Checker Pin");
         session.lastMenu = null; // exit submenu to start collecting details
+        session.mode = "bot";
         data.sessions[from] = session;
         writeData(data);
         await sendText(from, `${SERVICE_MESSAGES.unicalCheckerPin}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
@@ -439,6 +501,7 @@ app.post("/webhook", async (req, res) => {
       if (/^2$/i.test(lower)) {
         const job = createJob("Acceptance Fee");
         session.lastMenu = null;
+        session.mode = "bot";
         data.sessions[from] = session;
         writeData(data);
         await sendText(from, `${SERVICE_MESSAGES.acceptanceFee}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
@@ -448,6 +511,7 @@ app.post("/webhook", async (req, res) => {
       if (/^3$/i.test(lower)) {
         const job = createJob("O'level Verification");
         session.lastMenu = null;
+        session.mode = "bot";
         data.sessions[from] = session;
         writeData(data);
         await sendText(from, `${SERVICE_MESSAGES.olevelVerification}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
@@ -457,6 +521,7 @@ app.post("/webhook", async (req, res) => {
       if (/^4$/i.test(lower)) {
         const job = createJob("Online Screening");
         session.lastMenu = null;
+        session.mode = "bot";
         data.sessions[from] = session;
         writeData(data);
         await sendText(from, `${SERVICE_MESSAGES.onlineScreening}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
@@ -466,6 +531,7 @@ app.post("/webhook", async (req, res) => {
       if (/^5$/i.test(lower)) {
         const job = createJob("Other Documents");
         session.lastMenu = null;
+        session.mode = "bot";
         data.sessions[from] = session;
         writeData(data);
         await sendText(from, `${SERVICE_MESSAGES.otherDocuments}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
@@ -484,6 +550,7 @@ app.post("/webhook", async (req, res) => {
       const jobId = session.currentJobId;
       // clear currentJobId from session
       session.currentJobId = null;
+      session.mode = "bot";
       data.sessions[from] = session;
       writeData(data);
 
@@ -500,7 +567,7 @@ app.post("/webhook", async (req, res) => {
     }
 
     // Collect details only if user has an active job and not inside a menu
-    if (session.currentJobId && session.lastMenu === null) {
+    if (session.currentJobId && session.lastMenu === null && session.mode === "bot") {
       const job = data.queue.find(j => j.jobId === session.currentJobId);
       if (job) {
         if (!job.details) job.details = { messages: [] };
@@ -533,4 +600,3 @@ app.post("/webhook", async (req, res) => {
 /* ================ ROOT ================ */
 app.get("/", (req, res) => res.send("QuickStop Cyber WasenderAPI Bot running."));
 app.listen(PORT, () => console.log(`Bot running on port ${PORT}`));
-
