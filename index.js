@@ -1,42 +1,51 @@
 /**
- QuickStop Cyber Cafe — Full WasenderAPI Node.js Bot
- Supports all services, detail collection + admin notification + proper ticket IDs
+ QuickStop Cyber Cafe — WasenderAPI Node.js Bot (Fully Fixed & Updated)
+ - Queue & persistent ticket IDs fixed
+ - Admin/agent handover fixed
+ - Robust session & file persistence
+ - School Fees: only ask for details + send account number
 */
 
 const express = require("express");
 const axios = require("axios");
 const fs = require("fs-extra");
 const path = require("path");
+const writeJsonAtomic = require("write-json-file");
 
 const app = express();
 app.use(express.json());
 
-/* ========== CONFIG - EDIT THESE ========== */
+/* ========== CONFIG ========== */
 const INSTANCE_ID = process.env.INSTANCE_ID || "34742";
 const TOKEN = process.env.TOKEN || "1c309d0ee36ceb74c73a60250bdfee602dfea2857de857a6a56d8a29560cdfff";
-const ADMIN_KEY = process.env.ADMIN_KEY || "01081711";
-const ADMIN_NUMBER = process.env.ADMIN_NUMBER || "2348057703948";
 const PORT = process.env.PORT || 3000;
-/* ========================================= */
 
-const SEND_MESSAGE_URL = "https://wasenderapi.com/api/send-message";
+/* ========== ADMINS ========== */
+const ADMINS = [
+  normalizeNumber(process.env.ADMIN_NUMBER || "2348057703948"),
+  normalizeNumber("2348166008021")
+];
+
+/* ========== DATA FILE ========== */
 const DATA_FILE = path.join(__dirname, "data.json");
 
-// Initialize data
 if (!fs.existsSync(DATA_FILE)) {
   fs.writeJsonSync(DATA_FILE, { queue: [], sessions: {}, nextJobId: 1 }, { spaces: 2 });
   console.log("Initialized data.json");
 }
 
 function readData() { return fs.readJsonSync(DATA_FILE); }
-function writeData(d) { fs.writeJsonSync(DATA_FILE, d, { spaces: 2 }); }
+async function writeData(d) { await writeJsonAtomic(DATA_FILE, d, { spaces: 2 }); }
+
+/* ========== HELPERS ========== */
+function normalizeNumber(n) { return (n || "").toString().replace(/\D/g, ""); }
 
 async function sendText(toNumber, text) {
   try {
     const to = ("" + toNumber).replace(/\D/g, "");
     const resp = await axios.post(
-      SEND_MESSAGE_URL,
-      { to: to, text: text },
+      "https://wasenderapi.com/api/send-message",
+      { to: to, text },
       { headers: { Authorization: `Bearer ${TOKEN}` } }
     );
     console.log(`✅ Message sent to ${to} (len ${String(text).length})`);
@@ -47,14 +56,18 @@ async function sendText(toNumber, text) {
       messageSnippet: ("" + text).slice(0, 200),
       axiosError: err?.response?.data || err.message || err
     });
-    // don't throw here - allow webhook to continue gracefully
     return null;
   }
 }
 
-function normalizeNumber(n) { return (n || "").toString().replace(/\D/g, ""); }
+async function notifyAdmins(message) {
+  for (const admin of ADMINS) {
+    try { await sendText(admin, message); } 
+    catch(e) { console.error("notifyAdmins failed:", admin, e); }
+  }
+}
 
-/* ================= BOT CONTENT ================= */
+/* ========== MESSAGES ========== */
 const TESTING_NOTICE = "⚠️ This is QuickStop bot in testing phase. Our team will assist if anything goes wrong.";
 
 const WELCOME_MENU = `👋 Welcome to QuickStop Cyber Cafe!
@@ -94,21 +107,18 @@ Send: Full Name, Reg Number, Email, Phone Number
 Pay: KUDA 3002896343 QUICKSTOP CYBER CAFE
 
 ${TESTING_NOTICE}`,
-
   acceptanceFee: `🟦 ACCEPTANCE FEE
 Price: ₦42000
 Send: Full Name, Reg Number, UNICAL Checker Pin, Email, Phone Number
 Pay: KUDA 3002896343 QUICKSTOP CYBER CAFE
 
 ${TESTING_NOTICE}`,
-
   olevelVerification: `🟦 O'LEVEL VERIFICATION
 Price: ₦10500
 Send: Full Name, Reg Number, Email, Phone Number, O'Level Result, Department, Faculty
 Pay: KUDA 3002896343 QUICKSTOP CYBER CAFE
 
 ${TESTING_NOTICE}`,
-
   onlineScreening: `🟦 ONLINE SCREENING
 Price: ₦2500
 Send: Full Name, Reg Number, Address, DOB, Phone, Email, State of origin, LGA, Hometown, Sponsor info, Emergency Contact
@@ -116,487 +126,199 @@ Send clear photos: Passport, JAMB Admission, O'Level Result, Attestation, Birth 
 Pay: KUDA 3002896343 QUICKSTOP CYBER CAFE
 
 ${TESTING_NOTICE}`,
-
   otherDocuments: `🟦 OTHER DOCUMENTS
 Attestation ₦1000, Birth Cert ₦4000, Cert of Origin ₦5000
 Send which one + details
 Pay: KUDA 3002896343 QUICKSTOP CYBER CAFE
 
 ${TESTING_NOTICE}`,
-
   schoolFees: `🟦 SCHOOL FEES PAYMENT
-Send: Student type (Fresh/Returning/Final), School (UNICAL/UICROSS), Registration/Matric/JAMB Number
-
+Please send your Full Name, Matric Number, and School (UNICAL/UICROSS).
+We will provide account number for payment.
 ${TESTING_NOTICE}`,
-
   onlineCourses: `🟦 ONLINE COURSES REGISTRATION
 Send: Full Name, Matric Number, Courses, Level, Email, Phone Number
 
 ${TESTING_NOTICE}`,
-
   jambAdmission: `🟦 JAMB RESULT & ADMISSION LETTER
 Send: Full Name, JAMB Number, Matric Number, Email, Phone Number
 
 ${TESTING_NOTICE}`,
-
   typingPrinting: `🟦 TYPING, PRINTING & PHOTOCOPY
 Send: Full Name, Documents Description, Phone Number
 
 ${TESTING_NOTICE}`,
-
   graphicDesign: `🟦 GRAPHIC DESIGN
 Send: Full Name, Description of work, Phone Number
 
 ${TESTING_NOTICE}`,
-
   webDesign: `🟦 WEB DESIGN
 Send: Full Name, Description of project, Phone Number
 
 ${TESTING_NOTICE}`,
 };
 
-/* ================ QUEUE & SESSIONS ================ */
-function addToQueue(number, serviceName, details = {}) {
+/* ========== QUEUE HELPERS ========== */
+function queuePosition(queue, jobId) {
+  const waiting = queue.filter(j => j.status === "waiting").sort((a,b)=>a.createdAt-b.createdAt);
+  const pos = waiting.findIndex(j => j.jobId === jobId);
+  return pos >=0 ? pos+1 : -1;
+}
+
+async function createJob(from, serviceName) {
   const data = readData();
+  const nextJobId = data.nextJobId || 1;
+
   const job = {
-    jobId: data.nextJobId++,
-    number,
+    jobId: nextJobId,
+    number: from,
     shortService: serviceName,
-    details,
+    details: { messages: [] },
     createdAt: Date.now(),
     paid: false,
     status: "waiting",
     agent: null
   };
+
   data.queue.push(job);
-  writeData(data);
-  console.log(`-> addToQueue created job ${job.jobId} for ${number}`);
+  data.nextJobId = nextJobId + 1;
+
+  // link session
+  data.sessions[from] = data.sessions[from] || { lastMenu: null, currentJobId: job.jobId, mode: "bot" };
+  data.sessions[from].currentJobId = job.jobId;
+  data.sessions[from].mode = "bot";
+  await writeData(data);
+
+  console.log(`createJob -> job ${job.jobId} created for ${from}`);
   return job;
 }
 
-function queuePosition(jobId) {
-  const data = readData();
-  const waiting = data.queue.filter(j => j.status === "waiting");
-  const pos = waiting.findIndex(j => j.jobId === jobId);
-  return pos >= 0 ? pos + 1 : -1;
-}
-
-/* ================ HELPER: Robust extractor ================ */
+/* ========== TEXT + FROM EXTRACTOR ========== */
 function extractTextAndFrom(body) {
-  // try various shapes
-  let text = "";
-  let fromRaw = "";
-
-  // common shape: body.data.messages (object or array)
-  if (body && body.data && body.data.messages) {
+  let text = "", fromRaw = "";
+  if(body?.data?.messages) {
     const m = Array.isArray(body.data.messages) ? body.data.messages[0] : body.data.messages;
-    if (m) {
-      text = m.messageBody || m.body || m.text || m.message || "";
-      fromRaw = m.remoteJid || m.from || m.sender || m.participant || "";
-    }
+    if(m) { text = m.messageBody || m.body || m.text || ""; fromRaw = m.remoteJid || m.from || ""; }
   }
-
-  // fallback to body.messages
-  if (!text && body && body.messages) {
+  if(!text && body?.messages) {
     const m = Array.isArray(body.messages) ? body.messages[0] : body.messages;
-    if (m) {
-      text = m.body || m.text || m.messageBody || "";
-      fromRaw = m.from || m.remoteJid || m.sender || "";
-    }
+    if(m) { text = m.body || m.text || ""; fromRaw = m.from || ""; }
   }
-
-  // fallback top-level
-  if (!text && typeof body.text === "string") text = body.text;
-  if (!fromRaw && typeof body.from === "string") fromRaw = body.from;
-
-  // normalize remoteJid
+  if(!text && typeof body.text === "string") text = body.text;
+  if(!fromRaw && typeof body.from === "string") fromRaw = body.from;
   fromRaw = (fromRaw || "").toString().replace(/@s\.whatsapp\.net$/, "");
   text = (text || "").toString();
-
   return { text, fromRaw };
 }
 
-/* ================ WEBHOOK ================= */
+/* ========== WEBHOOK ========== */
 app.post("/webhook", async (req, res) => {
   try {
     const body = req.body || {};
-
-    // extract robustly
     const { text, fromRaw } = extractTextAndFrom(body);
-
-    // logging incoming raw (small) for debugging
-    console.log("WEBHOOK RAW (truncated):", JSON.stringify(body).slice(0, 800));
-    console.log("EXTRACTED text:", text, "fromRaw:", fromRaw);
-
-    if (!text || !fromRaw) {
-      console.log("No text/from extracted — ignoring");
-      return res.sendStatus(200);
-    }
+    if(!text || !fromRaw) return res.sendStatus(200);
 
     const from = normalizeNumber(fromRaw);
     const lower = text.trim().toLowerCase();
 
-    // load data and ensure session exists
     const data = readData();
     data.sessions = data.sessions || {};
-    if (!data.sessions[from]) data.sessions[from] = { lastMenu: "main", currentJobId: null, mode: "bot" };
-    const session = data.sessions[from];
+    const session = data.sessions[from] || { lastMenu: "main", currentJobId: null, mode: "bot" };
+    const isAdmin = ADMINS.includes(from);
 
-    // ensure lastMenu is explicitly one of: "main", "new_student", null
-    if (typeof session.lastMenu === "undefined") session.lastMenu = "main";
-    if (typeof session.mode === "undefined") session.mode = "bot";
-
-    console.log("=== INCOMING ===");
-    console.log("from:", from);
-    console.log("text:", text);
-    console.log("lower:", lower);
-    console.log("session before:", JSON.stringify(session));
-    console.log("nextJobId:", data.nextJobId);
-    console.log("================");
-
-    const isAdmin = from === normalizeNumber(ADMIN_NUMBER);
-
-    /* ------------------- ADMIN COMMANDS ------------------- */
-    if (isAdmin && /^(admin|agent):/i.test(lower)) {
+    // ---------- ADMIN COMMANDS ----------
+    if(isAdmin && /^(admin|agent):/i.test(lower)) {
       const parts = text.split(":");
       const cmd = parts[0].toLowerCase();
       const jobId = Number(parts[1]);
       const payload = parts.slice(2).join(":").trim();
       const job = data.queue.find(j => j.jobId === jobId);
-      if (!job) { await sendText(from, `Ticket ${jobId} not found.`); writeData(data); return res.sendStatus(200); }
+      if(!job) { await sendText(from, `Ticket ${jobId} not found.`); return res.sendStatus(200); }
 
-      if (cmd === "admin") {
-        // admin sets fee — unaffected
+      if(cmd==="admin") {
         await sendText(job.number, `🧾 Your fee for Ticket ${jobId} is ₦${payload}.\nPlease pay and send screenshot.`);
         await sendText(from, `✅ Fee sent to ${job.number} for Ticket ${jobId}`);
-      } else if (cmd === "agent") {
-        // agent messages (forward to user). Special payload "done" closes job.
-        if (payload.toLowerCase() === "done") {
-          // close job
+      } else if(cmd==="agent") {
+        if(payload.toLowerCase() === "done") {
           job.status = "done";
-          writeData(data);
+          job.closedAt = Date.now();
           await sendText(job.number, `✅ Your request (Ticket ${jobId}) has been completed.`);
-          await sendText(from, `✅ Ticket ${jobId} closed.`);
-
-          // clear session mode for that user (handover end)
+          await notifyAdmins(`✅ Ticket ${jobId} closed by admin ${from}.`);
           const userSession = data.sessions[job.number];
-          if (userSession) {
-            userSession.mode = "bot";
-            userSession.currentJobId = null;
-            data.sessions[job.number] = userSession;
-            writeData(data);
-          }
-          return res.sendStatus(200);
+          if(userSession) { userSession.mode = "bot"; userSession.currentJobId = null; userSession.lastMenu = "main"; data.sessions[job.number]=userSession; }
+        } else {
+          job.details.agentMessages = job.details.agentMessages || [];
+          job.details.agentMessages.push({ admin: from, msg: payload, time: Date.now() });
+          if(!job.agent) job.agent = from;
+          data.sessions[job.number] = data.sessions[job.number] || { lastMenu:null, currentJobId:job.jobId, mode:"agent_chat" };
+          data.sessions[job.number].mode="agent_chat";
+          data.sessions[job.number].currentJobId = job.jobId;
+          await sendText(job.number, `💬 Message from agent:\n${payload}`);
+          await sendText(from, `✅ Message sent to ${job.number} for Ticket ${jobId}.`);
         }
-
-        // normal agent message (forward to user)
-        job.details.agentMessages = job.details.agentMessages || [];
-        job.details.agentMessages.push({ msg: payload, time: Date.now() });
-        writeData(data);
-
-        // mark job as assigned if not already
-        if (!job.agent) job.agent = from;
-
-        // set user's session into active agent chat
-        data.sessions[job.number] = data.sessions[job.number] || { lastMenu: null, currentJobId: job.jobId, mode: "agent_chat" };
-        data.sessions[job.number].mode = "agent_chat";
-        data.sessions[job.number].currentJobId = job.jobId;
-        writeData(data);
-
-        // forward message to user
-        await sendText(job.number, `💬 Message from agent:\n${payload}`);
-        await sendText(from, `✅ Message sent to ${job.number} for Ticket ${jobId}.`);
       }
-      writeData(data);
+      await writeData(data);
       return res.sendStatus(200);
     }
 
-    /* ------------------- If user is currently in an agent chat, forward messages to admin and don't reply with menus ------------------- */
-    if (session.mode === "agent_chat") {
-      // ensure we have a current job id
+    // ---------- USER AGENT CHAT ----------
+    if(session.mode === "agent_chat") {
       let jobId = session.currentJobId;
-      if (!jobId) {
-        // attempt to find an assigned job for this user
-        const maybe = data.queue.find(j => j.number === from && j.agent);
-        if (maybe) jobId = maybe.jobId;
-        // link job to session if found
-        if (jobId) {
-          session.currentJobId = jobId;
-          data.sessions[from] = session;
-          writeData(data);
-        }
+      if(!jobId) {
+        const maybe = data.queue.find(j => j.number===from && j.agent);
+        if(maybe) jobId = maybe.jobId; session.currentJobId = jobId; data.sessions[from]=session; await writeData(data);
       }
-
-      // forward user's message to admin with job context
-      const forwardMsg = `📨 Message from user (Ticket ${jobId || "unknown"}) [${from}]:\n${text}`;
-      await sendText(ADMIN_NUMBER, forwardMsg);
-      // optionally acknowledge to user lightly (or be silent). We'll acknowledge.
-      await sendText(from, `📤 Your message has been forwarded to our agent. They will reply shortly. (Ticket ${jobId || "N/A"})`);
+      await notifyAdmins(`📨 Message from user (Ticket ${jobId||"unknown"}) [${from}]:\n${text}`);
+      await sendText(from, `📤 Your message has been forwarded to our agent(s). Ticket ${jobId||"N/A"}`);
       return res.sendStatus(200);
     }
 
-    /* ------------------- NAVIGATION: 0 = back to main or 'menu' ------------------- */
-    if (lower === "0" || /^menu$/i.test(lower) || /^main$/i.test(lower)) {
-      session.lastMenu = "main";
-      // do NOT clear currentJobId here because user may be mid-job; they can still send details
-      session.mode = "bot";
-      data.sessions[from] = session;
-      writeData(data);
+    // ---------- NAVIGATION ----------
+    if(lower==="0" || /^menu$/i.test(lower) || /^main$/i.test(lower)) {
+      session.lastMenu="main"; session.mode="bot"; data.sessions[from]=session; await writeData(data);
       await sendText(from, WELCOME_MENU);
       return res.sendStatus(200);
     }
 
-    /* ------------------- CREATE JOB helper ------------------- */
-    function createJob(serviceName) {
-      const job = {
-        jobId: data.nextJobId++,
-        number: from,
-        shortService: serviceName,
-        details: { messages: [] },
-        createdAt: Date.now(),
-        paid: false,
-        status: "waiting",
-        agent: null
-      };
-      data.queue.push(job);
-      // link session to job and persist
-      session.currentJobId = job.jobId;
-      session.mode = "bot"; // by default bot mode (until explicit handover)
-      data.sessions[from] = session;
-      writeData(data);
-      console.log(`createJob -> job ${job.jobId} created and session saved`);
-      return job;
+    // ---------- MENU LOGIC ----------
+    if(session.lastMenu==="main") {
+      if(/^(hi|hello|menu|start)$/i.test(lower)) { await sendText(from, WELCOME_MENU); return res.sendStatus(200); }
+      if(/^(8|agent|human|help|talk to an agent)$/i.test(lower)) {
+        const job = await createJob(from,"Speak to Agent");
+        await sendText(from, `🙋‍♂️ You are now in the queue. Ticket ID: *${job.jobId}*.\nQueue position: *${queuePosition(data.queue,job.jobId)}*.\nAn agent will connect soon.\n${TESTING_NOTICE}`);
+        await notifyAdmins(`📥 New agent request\nTicket ${job.jobId} from ${from}\nService: Speak to Agent`);
+        session.lastMenu=null; session.mode="awaiting_agent"; session.currentJobId=job.jobId; data.sessions[from]=session; await writeData(data);
+        return res.sendStatus(200);
+      }
+      if(/^1$/i.test(lower)) { session.lastMenu="new_student"; data.sessions[from]=session; await writeData(data); await sendText(from, NEW_STUDENT_MENU); return res.sendStatus(200); }
+      if(/^2$/i.test(lower)) { const job=await createJob(from,"School Fees Payment"); await sendText(from, `${SERVICE_MESSAGES.schoolFees}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(data.queue,job.jobId)}`); session.lastMenu=null; data.sessions[from]=session; await writeData(data); return res.sendStatus(200); }
+      if(/^3$/i.test(lower)) { const job=await createJob(from,"Online Courses Registration"); await sendText(from, `${SERVICE_MESSAGES.onlineCourses}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(data.queue,job.jobId)}\nSend details now. Type *done* when finished.`); session.lastMenu=null; data.sessions[from]=session; await writeData(data); return res.sendStatus(200); }
+      if(/^4$/i.test(lower)) { const job=await createJob(from,"JAMB Result & Admission Letter"); await sendText(from, `${SERVICE_MESSAGES.jambAdmission}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(data.queue,job.jobId)}\nSend details now. Type *done* when finished.`); session.lastMenu=null; data.sessions[from]=session; await writeData(data); return res.sendStatus(200); }
+      if(/^5$/i.test(lower)) { const job=await createJob(from,"Typing/Printing/Photocopy"); await sendText(from, `${SERVICE_MESSAGES.typingPrinting}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(data.queue,job.jobId)}\nSend details now. Type *done* when finished.`); session.lastMenu=null; data.sessions[from]=session; await writeData(data); return res.sendStatus(200); }
+      if(/^6$/i.test(lower)) { const job=await createJob(from,"Graphic Design"); await sendText(from, `${SERVICE_MESSAGES.graphicDesign}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(data.queue,job.jobId)}\nSend details now. Type *done* when finished.`); session.lastMenu=null; data.sessions[from]=session; await writeData(data); return res.sendStatus(200); }
+      if(/^7$/i.test(lower)) { const job=await createJob(from,"Web Design"); await sendText(from, `${SERVICE_MESSAGES.webDesign}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(data.queue,job.jobId)}\nSend details now. Type *done* when finished.`); session.lastMenu=null; data.sessions[from]=session; await writeData(data); return res.sendStatus(200); }
+      await sendText(from, `Invalid main menu option. Press 0 to return to main menu or type *menu*.\n${TESTING_NOTICE}`); return res.sendStatus(200);
     }
 
-    /* ================= MENU LOGIC - use session.lastMenu as context ================= */
-
-    // If user is in main menu context
-    if (session.lastMenu === "main") {
-      // MAIN menu options (only these are valid here)
-      if (/^(hi|hello|menu|start)$/i.test(lower)) {
-        // repeat welcome
-        await sendText(from, WELCOME_MENU);
-        return res.sendStatus(200);
-      }
-
-      // 8 -> speak to agent
-      if (/^(8|agent|human|help|talk to an agent)$/i.test(lower)) {
-        const job = createJob("Speak to Agent");
-        await sendText(from, `🙋‍♂️ You are now in the queue. Ticket ID: *${job.jobId}*.\nQueue position: *${queuePosition(job.jobId)}*.\nAn agent will connect soon.\n${TESTING_NOTICE}`);
-        // notify admin
-        await sendText(ADMIN_NUMBER, `📥 New agent request\nTicket ${job.jobId} from ${from}\nService: Speak to Agent`);
-        // After creating a job, set session to awaiting_agent so the bot won't auto-reply with menus
-        session.lastMenu = null;
-        session.mode = "awaiting_agent";
-        session.currentJobId = job.jobId;
-        data.sessions[from] = session;
-        writeData(data);
-        return res.sendStatus(200);
-      }
-
-      // top-level numeric options
-      if (/^1$/i.test(lower)) {
-        // enter new_student submenu
-        session.lastMenu = "new_student";
-        data.sessions[from] = session;
-        writeData(data);
-        await sendText(from, NEW_STUDENT_MENU);
-        return res.sendStatus(200);
-      }
-
-      if (/^2$/i.test(lower)) {
-        const job = createJob("School Fees Payment");
-        const svcMsg = SERVICE_MESSAGES.schoolFees || "";
-        await sendText(from, `${svcMsg}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
-        // clear menu (we're now collecting details)
-        session.lastMenu = null;
-        session.mode = "bot";
-        data.sessions[from] = session;
-        writeData(data);
-        return res.sendStatus(200);
-      }
-
-      if (/^3$/i.test(lower)) {
-        const job = createJob("Online Courses Registration");
-        const svcMsg = SERVICE_MESSAGES.onlineCourses || "";
-        await sendText(from, `${svcMsg}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
-        session.lastMenu = null;
-        session.mode = "bot";
-        data.sessions[from] = session;
-        writeData(data);
-        return res.sendStatus(200);
-      }
-
-      if (/^4$/i.test(lower)) {
-        const job = createJob("JAMB Result & Admission Letter");
-        const svcMsg = SERVICE_MESSAGES.jambAdmission || "";
-        await sendText(from, `${svcMsg}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
-        session.lastMenu = null;
-        session.mode = "bot";
-        data.sessions[from] = session;
-        writeData(data);
-        return res.sendStatus(200);
-      }
-
-      if (/^5$/i.test(lower)) {
-        const job = createJob("Typing/Printing/Photocopy");
-        const svcMsg = SERVICE_MESSAGES.typingPrinting || "";
-        await sendText(from, `${svcMsg}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
-        session.lastMenu = null;
-        session.mode = "bot";
-        data.sessions[from] = session;
-        writeData(data);
-        return res.sendStatus(200);
-      }
-
-      if (/^6$/i.test(lower)) {
-        const job = createJob("Graphic Design");
-        const svcMsg = SERVICE_MESSAGES.graphicDesign || "";
-        await sendText(from, `${svcMsg}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
-        session.lastMenu = null;
-        session.mode = "bot";
-        data.sessions[from] = session;
-        writeData(data);
-        return res.sendStatus(200);
-      }
-
-      if (/^7$/i.test(lower)) {
-        const job = createJob("Web Design");
-        const svcMsg = SERVICE_MESSAGES.webDesign || "";
-        await sendText(from, `${svcMsg}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
-        session.lastMenu = null;
-        session.mode = "bot";
-        data.sessions[from] = session;
-        writeData(data);
-        return res.sendStatus(200);
-      }
-
-      // invalid option in main menu
-      await sendText(from, `Invalid main menu option. Press 0 to return to main menu or type *menu*.\n${TESTING_NOTICE}`);
-      return res.sendStatus(200);
-    } // end session.lastMenu === "main"
-
-    // If user is in new_student submenu context
-    if (session.lastMenu === "new_student") {
-      // allow 0 -> back to main
-      if (lower === "0") {
-        session.lastMenu = "main";
-        data.sessions[from] = session;
-        writeData(data);
-        await sendText(from, WELCOME_MENU);
-        return res.sendStatus(200);
-      }
-
-      // selections within new_student only
-      if (/^1$/i.test(lower)) {
-        const job = createJob("UNICAL Checker Pin");
-        session.lastMenu = null; // exit submenu to start collecting details
-        session.mode = "bot";
-        data.sessions[from] = session;
-        writeData(data);
-        await sendText(from, `${SERVICE_MESSAGES.unicalCheckerPin}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
-        return res.sendStatus(200);
-      }
-
-      if (/^2$/i.test(lower)) {
-        const job = createJob("Acceptance Fee");
-        session.lastMenu = null;
-        session.mode = "bot";
-        data.sessions[from] = session;
-        writeData(data);
-        await sendText(from, `${SERVICE_MESSAGES.acceptanceFee}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
-        return res.sendStatus(200);
-      }
-
-      if (/^3$/i.test(lower)) {
-        const job = createJob("O'level Verification");
-        session.lastMenu = null;
-        session.mode = "bot";
-        data.sessions[from] = session;
-        writeData(data);
-        await sendText(from, `${SERVICE_MESSAGES.olevelVerification}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
-        return res.sendStatus(200);
-      }
-
-      if (/^4$/i.test(lower)) {
-        const job = createJob("Online Screening");
-        session.lastMenu = null;
-        session.mode = "bot";
-        data.sessions[from] = session;
-        writeData(data);
-        await sendText(from, `${SERVICE_MESSAGES.onlineScreening}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
-        return res.sendStatus(200);
-      }
-
-      if (/^5$/i.test(lower)) {
-        const job = createJob("Other Documents");
-        session.lastMenu = null;
-        session.mode = "bot";
-        data.sessions[from] = session;
-        writeData(data);
-        await sendText(from, `${SERVICE_MESSAGES.otherDocuments}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(job.jobId)}\nSend details now. Type *done* when finished.`);
-        return res.sendStatus(200);
-      }
-
-      // invalid option within new_student menu
-      await sendText(from, `Invalid option for New Student menu. Press 0 to return to main menu.\n${TESTING_NOTICE}`);
-      return res.sendStatus(200);
-    } // end new_student menu
-
-    /* ------------------- If not in any menu (session.lastMenu === null), we are collecting details for a job ------------------- */
-
-    // DONE must be checked before collecting details
-    if (lower === "done" && session.currentJobId) {
-      const jobId = session.currentJobId;
-      // clear currentJobId from session
-      session.currentJobId = null;
-      session.mode = "bot";
-      data.sessions[from] = session;
-      writeData(data);
-
-      const job = data.queue.find(j => j.jobId === jobId);
-      if (job) {
-        await sendText(from, `✅ All details saved for Ticket ${jobId}. Admin will provide your fee shortly.`);
-        const collected = (job.details.messages || []).map(m => m.msg).join("\n");
-        await sendText(ADMIN_NUMBER, `📝 User details for Ticket ${jobId} from ${from}\nService: ${job.shortService}\nDetails:\n${collected}\n\nReply with admin:${jobId}:<amount>`);
-        console.log("Done: forwarded details to admin for job", jobId);
-      } else {
-        console.warn("Done typed but job not found:", jobId);
-      }
-      return res.sendStatus(200);
+    if(session.lastMenu==="new_student") {
+      if(lower==="0") { session.lastMenu="main"; data.sessions[from]=session; await writeData(data); await sendText(from,WELCOME_MENU); return res.sendStatus(200); }
+      if(/^1$/i.test(lower)) { const job=await createJob(from,"UNICAL Checker Pin"); session.lastMenu=null; session.mode="bot"; data.sessions[from]=session; await writeData(data); await sendText(from, `${SERVICE_MESSAGES.unicalCheckerPin}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(data.queue,job.jobId)}\nSend details now. Type *done* when finished.`); return res.sendStatus(200); }
+      if(/^2$/i.test(lower)) { const job=await createJob(from,"Acceptance Fee"); session.lastMenu=null; session.mode="bot"; data.sessions[from]=session; await writeData(data); await sendText(from, `${SERVICE_MESSAGES.acceptanceFee}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(data.queue,job.jobId)}\nSend details now. Type *done* when finished.`); return res.sendStatus(200); }
+      if(/^3$/i.test(lower)) { const job=await createJob(from,"O'level Verification"); session.lastMenu=null; session.mode="bot"; data.sessions[from]=session; await writeData(data); await sendText(from, `${SERVICE_MESSAGES.olevelVerification}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(data.queue,job.jobId)}\nSend details now. Type *done* when finished.`); return res.sendStatus(200); }
+      if(/^4$/i.test(lower)) { const job=await createJob(from,"Online Screening"); session.lastMenu=null; session.mode="bot"; data.sessions[from]=session; await writeData(data); await sendText(from, `${SERVICE_MESSAGES.onlineScreening}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(data.queue,job.jobId)}\nSend details now. Type *done* when finished.`); return res.sendStatus(200); }
+      if(/^5$/i.test(lower)) { const job=await createJob(from,"Other Documents"); session.lastMenu=null; session.mode="bot"; data.sessions[from]=session; await writeData(data); await sendText(from, `${SERVICE_MESSAGES.otherDocuments}\nTicket ID: ${job.jobId}\nQueue: ${queuePosition(data.queue,job.jobId)}\nSend details now. Type *done* when finished.`); return res.sendStatus(200); }
+      await sendText(from, `Invalid option in NEW STUDENT menu. Press 0 to return to main menu.`); return res.sendStatus(200);
     }
 
-    // Collect details only if user has an active job and not inside a menu
-    if (session.currentJobId && session.lastMenu === null && session.mode === "bot") {
-      const job = data.queue.find(j => j.jobId === session.currentJobId);
-      if (job) {
-        if (!job.details) job.details = { messages: [] };
-        job.details.messages.push({ msg: text, time: Date.now() });
-        writeData(data);
-        await sendText(from, `📌 Details received for Ticket ${job.jobId}. Send more or type *done* when finished.`);
-        console.log(`Saved details to job ${job.jobId} (message length ${text.length})`);
-        return res.sendStatus(200);
-      } else {
-        console.warn("session.currentJobId set but job not found:", session.currentJobId);
-      }
-    }
-
-    // fallback - not understood in the current context
-    if (session.lastMenu && session.lastMenu !== "main") {
-      await sendText(from, `Invalid option for the current menu. Press 0 to go back to the main menu.\n${TESTING_NOTICE}`);
-      return res.sendStatus(200);
-    }
-
-    // final fallback
-    await sendText(from, `Sorry, I didn't understand. Type *menu* for main menu or *8* to speak to an agent.\n${TESTING_NOTICE}`);
+    // ---------- DEFAULT ----------
+    await sendText(from, `Invalid input. Press 0 to return to main menu.\n${TESTING_NOTICE}`);
     return res.sendStatus(200);
 
   } catch (err) {
-    console.error("Unhandled webhook error:", err);
+    console.error("Webhook error:", err);
     return res.sendStatus(200);
   }
-}); // end webhook
+});
 
-/* ================ ROOT ================ */
-app.get("/", (req, res) => res.send("QuickStop Cyber WasenderAPI Bot running."));
-app.listen(PORT, () => console.log(`Bot running on port ${PORT}`));
+/* ========== START SERVER ========== */
+app.listen(PORT, () => console.log(`QuickStop Bot running on port ${PORT}`));
